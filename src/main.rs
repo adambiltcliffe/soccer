@@ -1,23 +1,36 @@
+use euclid::{vec2, Vector2D};
+use hecs::{DynamicBundle, Entity, EntityBuilder, World};
 use macroquad::prelude::*;
+use macroquad::rand::gen_range;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 
-const HEIGHT: i32 = 480;
-const WIDTH: i32 = 800;
+enum PixelUnit {}
 
-const HALF_WINDOW_WIDTH: i32 = WIDTH / 2;
+type Vector = Vector2D<f32, PixelUnit>;
 
-const LEVEL_W: i32 = 1000;
-const LEVEL_H: i32 = 1400;
-const HALF_LEVEL_W: i32 = LEVEL_W / 2;
-const HALF_LEVEL_H: i32 = LEVEL_H / 2;
+#[derive(Debug)]
+struct Position(Vector);
+struct Home(Vector);
+struct Team(u8);
+struct Ball();
 
-const HALF_PITCH_W: i32 = 442;
-const HALF_PITCH_H: i32 = 622;
+const HEIGHT: f32 = 480.0;
+const WIDTH: f32 = 800.0;
 
-const GOAL_WIDTH: i32 = 186;
-const GOAL_DEPTH: i32 = 20;
-const HALF_GOAL_W: i32 = GOAL_WIDTH / 2;
+const HALF_WINDOW_WIDTH: f32 = WIDTH / 2.0;
+
+const LEVEL_W: f32 = 1000.0;
+const LEVEL_H: f32 = 1400.0;
+const HALF_LEVEL_W: f32 = LEVEL_W / 2.0;
+const HALF_LEVEL_H: f32 = LEVEL_H / 2.0;
+
+const HALF_PITCH_W: f32 = 442.0;
+const HALF_PITCH_H: f32 = 622.0;
+
+const GOAL_WIDTH: f32 = 186.0;
+const GOAL_DEPTH: f32 = 20.0;
+const HALF_GOAL_W: f32 = GOAL_WIDTH / 2.0;
 
 /*
 PITCH_BOUNDS_X = (HALF_LEVEL_W - HALF_PITCH_W, HALF_LEVEL_W + HALF_PITCH_W)
@@ -35,9 +48,19 @@ AI_MIN_X = 78
 AI_MAX_X = LEVEL_W - 78
 AI_MIN_Y = 98
 AI_MAX_Y = LEVEL_H - 98
+*/
 
-PLAYER_START_POS = [(350, 550), (650, 450), (200, 850), (500, 750), (800, 950), (350, 1250), (650, 1150)]
+const PLAYER_START_POS: [(f32, f32); 7] = [
+    (350., 550.),
+    (650., 450.),
+    (200., 850.),
+    (500., 750.),
+    (800., 950.),
+    (350., 1250.),
+    (650., 1150.),
+];
 
+/*
 LEAD_DISTANCE_1 = 10
 LEAD_DISTANCE_2 = 50
 
@@ -151,18 +174,68 @@ enum MenuChange {
     NoChange,
 }
 
-/*
 struct Game {
-    num_players: NumPlayers,
-    difficulty_level: DifficultyLevel,
+    difficulty: Difficulty,
+    camera_focus: Vector,
+    world: World,
+    ball: Entity,
 }
-*/
+
+impl Game {
+    fn new(difficulty: Difficulty) -> Self {
+        let mut world = World::new();
+        let ball = world.spawn(make_ball().build());
+        let mut me = Self {
+            difficulty,
+            camera_focus: vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32),
+            world,
+            ball,
+        };
+        me.add_players();
+        me
+    }
+
+    fn reset(&mut self) {
+        self.world.clear();
+        self.ball = self.world.spawn(make_ball().build());
+        self.add_players();
+    }
+
+    fn add_players(&mut self) {
+        let mut eb = EntityBuilder::new();
+        for (x, y) in PLAYER_START_POS {
+            {
+                let x = x + gen_range(-32., 32.);
+                let y = y + gen_range(-32., 32.);
+                eb.add(Home(vec2(x, y)));
+                eb.add(Position(vec2(x, y / 2. + 550.)));
+                eb.add(Team(0));
+                self.world.spawn(eb.build());
+            }
+            {
+                let x = LEVEL_W - x + gen_range(-32., 32.);
+                let y = LEVEL_H - y + gen_range(-32., 32.);
+                eb.add(Home(vec2(x, y)));
+                eb.add(Position(vec2(x, y / 2. + 150.)));
+                eb.add(Team(1));
+                self.world.spawn(eb.build());
+            }
+        }
+    }
+}
+
+fn make_ball() -> EntityBuilder {
+    let mut eb = EntityBuilder::new();
+    eb.add(Position(vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32)));
+    eb.add(Ball);
+    eb
+}
 
 fn window_conf() -> Conf {
     return Conf {
         window_title: "Substitute Soccer".to_owned(),
-        window_width: WIDTH,
-        window_height: HEIGHT,
+        window_width: WIDTH as i32,
+        window_height: HEIGHT as i32,
         window_resizable: false,
         ..Default::default()
     };
@@ -187,17 +260,24 @@ impl Textures {
 
 #[macroquad::main(window_conf())]
 async fn main() {
+    macroquad::rand::srand(macroquad::miniquad::date::now() as u64);
     // load all the textures
     let mut textures = Textures::new();
     textures.preload("pitch").await;
+    textures.preload("ball").await;
+    textures.preload("balls").await;
     for k in vec!["01", "02", "10", "11", "12"] {
         textures.preload(format!("menu{}", k)).await;
     }
-    for k in vec!["000", "001", "002", "003", "004"] {
+    for k in vec!["000", "001", "100", "101"] {
         textures.preload(format!("player{}", k)).await;
+    }
+    for k in vec!["00", "01"] {
+        textures.preload(format!("players{}", k)).await;
     }
     // set up sound
     let mut state = State::Menu(MenuState::NumPlayers, Settings::new());
+    let mut game = Game::new(get_difficulty(DifficultyLevel::Hard));
     loop {
         match state {
             State::Menu(ref mut menu_state, ref mut settings) => {
@@ -267,7 +347,50 @@ async fn main() {
             State::GameOver => (),
         }
 
-        draw_texture(textures.get("pitch"), 0.0, 0.0, WHITE);
+        let offs_x = (game.camera_focus.x - WIDTH as f32 / 2.)
+            .min(LEVEL_W - WIDTH)
+            .max(0.0) as f32;
+        let offs_y = (game.camera_focus.y - HEIGHT as f32 / 2.)
+            .min(LEVEL_H - HEIGHT)
+            .max(0.0) as f32;
+        draw_texture(textures.get("pitch"), -offs_x, -offs_y, WHITE);
+
+        let mut sprites: Vec<(String, f32, f32)> = Vec::new();
+
+        for (_id, (pos, team)) in &mut game.world.query::<(&Position, &Team)>() {
+            sprites.push((
+                format!("player{}00", team.0).to_owned(),
+                pos.0.x - offs_x - 25., // hardcoded anchor
+                pos.0.y - offs_y - 37., // hardcoded anchor
+            ));
+            draw_texture(
+                textures.get("players00"),
+                pos.0.x - offs_x - 25.,
+                pos.0.y - offs_y - 37.,
+                WHITE,
+            );
+        }
+
+        let ball_pos = &*game.world.get::<Position>(game.ball).unwrap();
+        sprites.push((
+            "ball".to_owned(),
+            ball_pos.0.x - offs_x - 12.5,
+            ball_pos.0.y - offs_y - 12.5,
+        ));
+        draw_texture(
+            textures.get("balls"),
+            ball_pos.0.x - offs_x - 12.5,
+            ball_pos.0.y - offs_y - 12.5,
+            WHITE,
+        );
+
+        sprites.sort_unstable_by(|(_, _, y1), (_, _, y2)| {
+            y1.partial_cmp(y2).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        for (key, x, y) in sprites {
+            draw_texture(textures.get(&key), x, y, WHITE);
+        }
 
         match state {
             State::Menu(ref menu_state, ref settings) => {
@@ -281,8 +404,15 @@ async fn main() {
                 };
                 draw_texture(textures.get(&key), 0.0, 0.0, WHITE);
             }
-            State::Play => (),
-            State::GameOver => (),
+            State::Play => {
+                // display score bar at top
+                // show score for each team
+                // show GOAL if a goal has recently been scored
+            }
+            State::GameOver => {
+                // display GAME OVER image
+                // show score for each team
+            }
         }
         next_frame().await;
     }

@@ -9,3 +9,7 @@ edition = "2018"
 [dependencies]
 macroquad = "0.3.8"
 hecs = "0.6.0"
+euclid = "0.22.6"
+
+[profile.dev.package."*"]
+opt-level = 3
