@@ -1,5 +1,5 @@
 use euclid::{vec2, Vector2D};
-use hecs::{DynamicBundle, Entity, EntityBuilder, World};
+use hecs::{Entity, EntityBuilder, World};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 use std::collections::HashMap;
@@ -14,6 +14,31 @@ struct Position(Vector);
 struct Home(Vector);
 struct Team(u8);
 struct Ball();
+
+struct Target {
+    pos: Vector,
+    speed: f32,
+}
+
+impl Target {
+    fn new(pos: Vector) -> Self {
+        Self { pos, speed: 2.0 }
+    }
+}
+
+struct Animation {
+    dir: Angle,
+    frame: f32,
+}
+
+impl Animation {
+    fn new() -> Self {
+        Self {
+            dir: Angle(0),
+            frame: 0.0,
+        }
+    }
+}
 
 const HEIGHT: f32 = 480.0;
 const WIDTH: f32 = 800.0;
@@ -122,19 +147,22 @@ fn get_difficulty(level: DifficultyLevel) -> Difficulty {
 struct Angle(i32);
 
 impl Angle {
-    fn sin(a: Self) -> f32 {
-        (a.0 as f32 * PI / 4.0).sin()
+    fn sin(&self) -> f32 {
+        (self.0 as f32 * PI / 4.0).sin()
     }
 
-    fn cos(a: Self) -> f32 {
-        (a.0 as f32 * PI / 4.0).cos()
+    fn cos(&self) -> f32 {
+        (self.0 as f32 * PI / 4.0).cos()
+    }
+
+    fn from_vec(v: Vector) -> Self {
+        Angle((((4.0 / PI * v.x.atan2(-v.y)) + 8.5) as i32) % 8)
+    }
+
+    fn to_vec(a: Self) -> Vector {
+        vec2(a.sin(), -a.cos())
     }
 }
-
-// vec_to_angle
-// angle_to_vec
-
-// all the game logic ...
 
 enum State {
     Menu(MenuState, Settings),
@@ -184,7 +212,9 @@ struct Game {
 impl Game {
     fn new(difficulty: Difficulty) -> Self {
         let mut world = World::new();
-        let ball = world.spawn(make_ball().build());
+        let mut eb = EntityBuilder::new();
+        build_ball(&mut eb);
+        let ball = world.spawn(eb.build());
         let mut me = Self {
             difficulty,
             camera_focus: vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32),
@@ -197,38 +227,62 @@ impl Game {
 
     fn reset(&mut self) {
         self.world.clear();
-        self.ball = self.world.spawn(make_ball().build());
+        let mut eb = EntityBuilder::new();
+        build_ball(&mut eb);
+        self.ball = self.world.spawn(eb.build());
         self.add_players();
     }
 
     fn add_players(&mut self) {
         let mut eb = EntityBuilder::new();
         for (x, y) in PLAYER_START_POS {
-            {
-                let x = x + gen_range(-32., 32.);
-                let y = y + gen_range(-32., 32.);
-                eb.add(Home(vec2(x, y)));
-                eb.add(Position(vec2(x, y / 2. + 550.)));
-                eb.add(Team(0));
-                self.world.spawn(eb.build());
-            }
-            {
-                let x = LEVEL_W - x + gen_range(-32., 32.);
-                let y = LEVEL_H - y + gen_range(-32., 32.);
-                eb.add(Home(vec2(x, y)));
-                eb.add(Position(vec2(x, y / 2. + 150.)));
-                eb.add(Team(1));
-                self.world.spawn(eb.build());
-            }
+            build_player(&mut eb, x, y, 550., 0);
+            self.world.spawn(eb.build());
+            build_player(&mut eb, LEVEL_W - x, LEVEL_H - y, 150., 1);
+            self.world.spawn(eb.build());
         }
     }
 }
 
-fn make_ball() -> EntityBuilder {
-    let mut eb = EntityBuilder::new();
+fn build_ball(eb: &mut EntityBuilder) {
     eb.add(Position(vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32)));
     eb.add(Ball);
-    eb
+}
+
+fn build_player(eb: &mut EntityBuilder, x: f32, y: f32, offs: f32, team: u8) {
+    let x = x + gen_range(-32., 32.);
+    let y = y + gen_range(-32., 32.);
+    eb.add(Home(vec2(x, y)));
+    let start = vec2(x, y / 2. + offs);
+    eb.add(Position(start.clone()));
+    //eb.add(Target(start));
+    eb.add(Target::new(vec2(500., 700.)));
+    eb.add(Team(team));
+    eb.add(Animation::new());
+}
+
+fn update_players(world: &mut World, ball: Entity) {
+    let ball_pos = world.get::<Position>(ball).unwrap();
+    for (_, (target, pos, anim)) in &mut world.query::<(&Target, &mut Position, &mut Animation)>() {
+        let vector = target.pos - pos.0;
+        let target_dir;
+        let length = vector.length();
+        if length == 0.0 {
+            target_dir = Angle::from_vec(ball_pos.0 - pos.0);
+            anim.frame = 0.0;
+        } else {
+            let vector = vector.with_max_length(target.speed);
+            target_dir = Angle::from_vec(vector);
+            // todo: should do the allow_movement thing to slide here
+            // instead do this
+            pos.0 += vector;
+            anim.frame += vector.length().max(3.0); // todo tweak this
+            anim.frame %= 72.0;
+        }
+        // update facing direction here
+        // todo: should be gradual
+        anim.dir = target_dir;
+    }
 }
 
 fn window_conf() -> Conf {
@@ -266,16 +320,17 @@ async fn main() {
     textures.preload("pitch").await;
     textures.preload("ball").await;
     textures.preload("balls").await;
+    for d in 0..=7 {
+        for f in 0..=4 {
+            textures.preload(format!("player0{}{}", d, f)).await;
+            textures.preload(format!("player1{}{}", d, f)).await;
+            textures.preload(format!("players{}{}", d, f)).await;
+        }
+    }
     for k in vec!["01", "02", "10", "11", "12"] {
         textures.preload(format!("menu{}", k)).await;
     }
-    for k in vec!["000", "001", "100", "101"] {
-        textures.preload(format!("player{}", k)).await;
-    }
-    for k in vec!["00", "01"] {
-        textures.preload(format!("players{}", k)).await;
-    }
-    // set up sound
+    // todo set up sound
     let mut state = State::Menu(MenuState::NumPlayers, Settings::new());
     let mut game = Game::new(get_difficulty(DifficultyLevel::Hard));
     loop {
@@ -307,7 +362,7 @@ async fn main() {
                         change = MenuChange::Down;
                     }
                     if change != MenuChange::NoChange {
-                        // play "move" sound
+                        // todo play "move" sound
                         match menu_state {
                             MenuState::NumPlayers => {
                                 settings.num_players = match settings.num_players {
@@ -347,6 +402,8 @@ async fn main() {
             State::GameOver => (),
         }
 
+        update_players(&mut game.world, game.ball);
+
         let offs_x = (game.camera_focus.x - WIDTH as f32 / 2.)
             .min(LEVEL_W - WIDTH)
             .max(0.0) as f32;
@@ -357,14 +414,15 @@ async fn main() {
 
         let mut sprites: Vec<(String, f32, f32)> = Vec::new();
 
-        for (_id, (pos, team)) in &mut game.world.query::<(&Position, &Team)>() {
+        for (_id, (pos, team, anim)) in &mut game.world.query::<(&Position, &Team, &Animation)>() {
+            let suffix = format!("{}{}", anim.dir.0, (anim.frame as u32 / 18));
             sprites.push((
-                format!("player{}00", team.0).to_owned(),
+                format!("player{}{}", team.0, suffix).to_owned(),
                 pos.0.x - offs_x - 25., // hardcoded anchor
                 pos.0.y - offs_y - 37., // hardcoded anchor
             ));
             draw_texture(
-                textures.get("players00"),
+                textures.get(&format!("players{}", suffix)),
                 pos.0.x - offs_x - 25.,
                 pos.0.y - offs_y - 37.,
                 WHITE,
@@ -405,13 +463,13 @@ async fn main() {
                 draw_texture(textures.get(&key), 0.0, 0.0, WHITE);
             }
             State::Play => {
-                // display score bar at top
-                // show score for each team
-                // show GOAL if a goal has recently been scored
+                // todo display score bar at top
+                // todo show score for each team
+                // todo show GOAL if a goal has recently been scored
             }
             State::GameOver => {
-                // display GAME OVER image
-                // show score for each team
+                // todo display GAME OVER image
+                // todo show score for each team
             }
         }
         next_frame().await;
