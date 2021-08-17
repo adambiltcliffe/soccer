@@ -108,6 +108,32 @@ DEBUG_SHOW_COSTS = False
 */
 
 #[derive(Copy, Clone)]
+struct Controls {
+    up: KeyCode,
+    down: KeyCode,
+    left: KeyCode,
+    right: KeyCode,
+    shoot: KeyCode,
+}
+
+const team_controls: [Controls; 2] = [
+    Controls {
+        up: KeyCode::Up,
+        down: KeyCode::Down,
+        left: KeyCode::Left,
+        right: KeyCode::Right,
+        shoot: KeyCode::Space,
+    },
+    Controls {
+        up: KeyCode::W,
+        down: KeyCode::S,
+        left: KeyCode::A,
+        right: KeyCode::D,
+        shoot: KeyCode::LeftShift,
+    },
+];
+
+#[derive(Copy, Clone)]
 enum DifficultyLevel {
     Easy = 0,
     Medium = 1,
@@ -202,11 +228,32 @@ enum MenuChange {
     NoChange,
 }
 
+struct TeamInfo {
+    controls: Option<Controls>,
+    score: u8,
+    active_player: Option<Entity>,
+}
+
+impl TeamInfo {
+    fn new(controls: Option<Controls>) -> Self {
+        Self {
+            controls,
+            score: 0,
+            active_player: None,
+        }
+    }
+
+    fn human(&self) -> bool {
+        self.controls.is_some()
+    }
+}
+
 struct Game {
     difficulty: Difficulty,
     camera_focus: Vector,
     world: World,
     ball: Entity,
+    teams: [TeamInfo; 2],
 }
 
 impl Game {
@@ -220,6 +267,7 @@ impl Game {
             camera_focus: vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32),
             world,
             ball,
+            teams: [TeamInfo::new(None), TeamInfo::new(None)],
         };
         me.add_players();
         me
@@ -234,13 +282,30 @@ impl Game {
     }
 
     fn add_players(&mut self) {
+        let mut ids = Vec::new();
         let mut eb = EntityBuilder::new();
         for (x, y) in PLAYER_START_POS {
             build_player(&mut eb, x, y, 550., 0);
-            self.world.spawn(eb.build());
+            ids.push(self.world.spawn(eb.build()));
             build_player(&mut eb, LEVEL_W - x, LEVEL_H - y, 150., 1);
-            self.world.spawn(eb.build());
+            ids.push(self.world.spawn(eb.build()));
         }
+        self.teams[0].active_player = Some(ids[0]);
+        self.teams[1].active_player = Some(ids[1]);
+    }
+
+    fn update(&mut self) {
+        // todo check for goal scored
+        // todo set behaviours (mark, leads, goalie)
+        self.set_player_targets();
+        update_players(&mut self.world, self.ball);
+        // todo update ball
+        // todo handle team switching
+        // todo update camera
+    }
+
+    fn set_player_targets(&mut self) {
+        // todo: everything here
     }
 }
 
@@ -320,6 +385,8 @@ async fn main() {
     textures.preload("pitch").await;
     textures.preload("ball").await;
     textures.preload("balls").await;
+    textures.preload("arrow0").await;
+    textures.preload("arrow1").await;
     for d in 0..=7 {
         for f in 0..=4 {
             textures.preload(format!("player0{}{}", d, f)).await;
@@ -339,20 +406,22 @@ async fn main() {
                 if is_key_pressed(KeyCode::Space) {
                     match menu_state {
                         MenuState::Difficulty => {
-                            /* start game */
+                            game = Game::new(get_difficulty(settings.difficulty_level));
+                            game.teams[0].controls = Some(team_controls[0]);
+                            game.teams[1].controls = None;
                             state = State::Play;
                         }
-                        MenuState::NumPlayers => {
-                            match settings.num_players {
-                                NumPlayers::One => {
-                                    *menu_state = MenuState::Difficulty;
-                                }
-                                NumPlayers::Two => {
-                                    /* start game */
-                                    state = State::Play;
-                                }
+                        MenuState::NumPlayers => match settings.num_players {
+                            NumPlayers::One => {
+                                *menu_state = MenuState::Difficulty;
                             }
-                        }
+                            NumPlayers::Two => {
+                                game = Game::new(get_difficulty(DifficultyLevel::Hard));
+                                game.teams[0].controls = Some(team_controls[0]);
+                                game.teams[1].controls = Some(team_controls[1]);
+                                state = State::Play;
+                            }
+                        },
                     };
                 } else {
                     let mut change = MenuChange::NoChange;
@@ -402,7 +471,7 @@ async fn main() {
             State::GameOver => (),
         }
 
-        update_players(&mut game.world, game.ball);
+        game.update();
 
         let offs_x = (game.camera_focus.x - WIDTH as f32 / 2.)
             .min(LEVEL_W - WIDTH)
@@ -448,6 +517,21 @@ async fn main() {
 
         for (key, x, y) in sprites {
             draw_texture(textures.get(&key), x, y, WHITE);
+        }
+
+        for t in 0..=1 {
+            if game.teams[t].human() {
+                if let Some(id) = game.teams[t].active_player {
+                    if let Ok(pos) = game.world.get::<Position>(id) {
+                        draw_texture(
+                            textures.get(&format!("arrow{}", t)),
+                            pos.0.x - offs_x - 11.,
+                            pos.0.y - offs_y - 45.,
+                            WHITE,
+                        )
+                    }
+                }
+            }
         }
 
         match state {
