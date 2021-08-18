@@ -90,16 +90,19 @@ LEAD_DISTANCE_1 = 10
 LEAD_DISTANCE_2 = 50
 
 DRIBBLE_DIST_X, DRIBBLE_DIST_Y = 18, 16
+*/
 
-# Speeds for players in various situations. Speeds including 'BASE' can be boosted by the speed_boost difficulty
-# setting (only for players on a computer-controlled team)
-PLAYER_DEFAULT_SPEED = 2
-CPU_PLAYER_WITH_BALL_BASE_SPEED = 2.6
-PLAYER_INTERCEPT_BALL_SPEED = 2.75
-LEAD_PLAYER_BASE_SPEED = 2.9
-HUMAN_PLAYER_WITH_BALL_SPEED = 3
-HUMAN_PLAYER_WITHOUT_BALL_SPEED = 3.3
+// Speeds for players in various situations. Speeds including 'BASE' can be boosted by the speed_boost difficulty
+// setting (only for players on a computer-controlled team)
+const PLAYER_DEFAULT_SPEED: f32 = 2.0;
+const CPU_PLAYER_WITH_BALL_BASE_SPEED: f32 = 2.6;
+const PLAYER_INTERCEPT_BALL_SPEED: f32 = 2.75;
+const LEAD_PLAYER_BASE_SPEED: f32 = 2.9;
+const HUMAN_PLAYER_WITH_BALL_SPEED: f32 = 3.0;
+const HUMAN_PLAYER_WITHOUT_BALL_SPEED: f32 = 3.3;
+const MAX_SPEED: f32 = 10.0;
 
+/*
 DEBUG_SHOW_LEADS = False
 DEBUG_SHOW_TARGETS = False
 DEBUG_SHOW_PEERS = False
@@ -116,7 +119,27 @@ struct Controls {
     shoot: KeyCode,
 }
 
-const team_controls: [Controls; 2] = [
+impl Controls {
+    fn movement(&self) -> Vector {
+        let dy = if is_key_down(self.up) {
+            -1.
+        } else if is_key_down(self.down) {
+            1.
+        } else {
+            0.
+        };
+        let dx = if is_key_down(self.left) {
+            -1.
+        } else if is_key_down(self.right) {
+            1.
+        } else {
+            0.
+        };
+        return vec2(dx, dy) * MAX_SPEED;
+    }
+}
+
+const TEAM_CONTROLS: [Controls; 2] = [
     Controls {
         up: KeyCode::Up,
         down: KeyCode::Down,
@@ -189,6 +212,8 @@ impl Angle {
         vec2(a.sin(), -a.cos())
     }
 }
+
+const ANGLE_DIFFS: [i32; 8] = [0, 1, 1, 1, 1, 7, 7, 7];
 
 enum State {
     Menu(MenuState, Settings),
@@ -305,7 +330,20 @@ impl Game {
     }
 
     fn set_player_targets(&mut self) {
-        // todo: everything here
+        for (id, (pos, team, target)) in &mut self.world.query::<(&Position, &Team, &mut Target)>()
+        {
+            let my_team = &self.teams[team.0 as usize];
+            let i_am_active_player = match my_team.active_player {
+                None => false,
+                Some(aid) => aid == id,
+            };
+            if my_team.human() && i_am_active_player {
+                // todo check we're not frozen for kickoff
+                // todo set our speed depending on whether we have the ball
+                target.speed = HUMAN_PLAYER_WITHOUT_BALL_SPEED;
+                target.pos = pos.0 + my_team.controls.unwrap().movement();
+            }
+        }
     }
 }
 
@@ -344,9 +382,8 @@ fn update_players(world: &mut World, ball: Entity) {
             anim.frame += vector.length().max(3.0); // todo tweak this
             anim.frame %= 72.0;
         }
-        // update facing direction here
-        // todo: should be gradual
-        anim.dir = target_dir;
+        let dir_diff = target_dir.0 - anim.dir.0;
+        anim.dir = Angle((anim.dir.0 + ANGLE_DIFFS[dir_diff as usize % 8]) % 8);
     }
 }
 
@@ -407,7 +444,7 @@ async fn main() {
                     match menu_state {
                         MenuState::Difficulty => {
                             game = Game::new(get_difficulty(settings.difficulty_level));
-                            game.teams[0].controls = Some(team_controls[0]);
+                            game.teams[0].controls = Some(TEAM_CONTROLS[0]);
                             game.teams[1].controls = None;
                             state = State::Play;
                         }
@@ -417,8 +454,8 @@ async fn main() {
                             }
                             NumPlayers::Two => {
                                 game = Game::new(get_difficulty(DifficultyLevel::Hard));
-                                game.teams[0].controls = Some(team_controls[0]);
-                                game.teams[1].controls = Some(team_controls[1]);
+                                game.teams[0].controls = Some(TEAM_CONTROLS[0]);
+                                game.teams[1].controls = Some(TEAM_CONTROLS[1]);
                                 state = State::Play;
                             }
                         },
