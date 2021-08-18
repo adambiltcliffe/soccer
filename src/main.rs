@@ -88,9 +88,10 @@ const PLAYER_START_POS: [(f32, f32); 7] = [
 /*
 LEAD_DISTANCE_1 = 10
 LEAD_DISTANCE_2 = 50
-
-DRIBBLE_DIST_X, DRIBBLE_DIST_Y = 18, 16
 */
+
+const DRIBBLE_DIST_X: f32 = 18.0;
+const DRIBBLE_DIST_Y: f32 = 16.0;
 
 // Speeds for players in various situations. Speeds including 'BASE' can be boosted by the speed_boost difficulty
 // setting (only for players on a computer-controlled team)
@@ -278,6 +279,7 @@ struct Game {
     camera_focus: Vector,
     world: World,
     ball: Entity,
+    ball_owner: Option<Entity>,
     teams: [TeamInfo; 2],
 }
 
@@ -292,6 +294,7 @@ impl Game {
             camera_focus: vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32),
             world,
             ball,
+            ball_owner: None,
             teams: [TeamInfo::new(None), TeamInfo::new(None)],
         };
         me.add_players();
@@ -324,9 +327,8 @@ impl Game {
         // todo set behaviours (mark, leads, goalie)
         self.set_player_targets();
         update_players(&mut self.world, self.ball);
-        // todo update ball
+        self.update_ball();
         // todo handle team switching
-        // todo update camera
     }
 
     fn set_player_targets(&mut self) {
@@ -344,6 +346,49 @@ impl Game {
                 target.pos = pos.0 + my_team.controls.unwrap().movement();
             }
         }
+    }
+
+    fn update_ball(&mut self) {
+        let mut ball_pos = self.world.get_mut::<Position>(self.ball).unwrap();
+        let owner_team: Option<u8>;
+        match self.ball_owner {
+            None => {
+                // todo run physics
+                owner_team = None;
+            }
+            Some(owner_id) => {
+                // calculate new position based on dribbling
+                let owner_pos = &*self.world.get::<Position>(owner_id).unwrap();
+                let owner_anim = &*self.world.get::<Animation>(owner_id).unwrap();
+                let new_x = avg(
+                    ball_pos.0.x,
+                    owner_pos.0.x + DRIBBLE_DIST_X * owner_anim.dir.sin(),
+                );
+                let new_y = avg(
+                    ball_pos.0.y,
+                    owner_pos.0.y - DRIBBLE_DIST_Y * owner_anim.dir.cos(),
+                );
+                // todo check ball doesn't go off pitch
+                ball_pos.0 = vec2(new_x, new_y);
+                owner_team = Some(self.world.get::<Team>(owner_id).unwrap().0);
+            }
+        }
+        // search for a player that can acquire the ball
+        for (id, (player_pos, team)) in &mut self.world.query::<(&Position, &Team)>() {
+            // todo can only acquire the ball if the player's holdoff timer is not set
+            if (owner_team.is_none() || owner_team.unwrap() != team.0)
+                && (ball_pos.0 - player_pos.0).length() <= DRIBBLE_DIST_X
+            {
+                // acquire the ball
+                // todo set previous owner's holdoff timer to 60
+                // todo set ball's timer so that computer can't shoot
+                self.ball_owner = Some(id);
+                self.teams[team.0 as usize].active_player = Some(id);
+            }
+        }
+        // todo if the ball has an owner, maybe kick it
+        // finally update camera position
+        self.camera_focus += (ball_pos.0 - self.camera_focus).with_max_length(8.0);
     }
 }
 
@@ -383,6 +428,14 @@ fn update_players(world: &mut World, ball: Entity) {
         }
         let dir_diff = target_dir.0 - anim.dir.0;
         anim.dir = Angle((anim.dir.0 + ANGLE_DIFFS[dir_diff as usize % 8]) % 8);
+    }
+}
+
+fn avg(a: f32, b: f32) -> f32 {
+    if (b - a).abs() < 1.0 {
+        b
+    } else {
+        (a + b) / 2.0
     }
 }
 
