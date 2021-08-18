@@ -358,8 +358,7 @@ fn build_player(eb: &mut EntityBuilder, x: f32, y: f32, offs: f32, team: u8) {
     eb.add(Home(vec2(x, y)));
     let start = vec2(x, y / 2. + offs);
     eb.add(Position(start.clone()));
-    //eb.add(Target(start));
-    eb.add(Target::new(vec2(500., 700.)));
+    eb.add(Target::new(start));
     eb.add(Team(team));
     eb.add(Animation::new());
 }
@@ -518,7 +517,7 @@ async fn main() {
             .max(0.0) as f32;
         draw_texture(textures.get("pitch"), -offs_x, -offs_y, WHITE);
 
-        let mut sprites: Vec<(String, f32, f32)> = Vec::new();
+        let mut sprites: Vec<(String, f32, f32, f32)> = Vec::new();
 
         for (_id, (pos, team, anim)) in &mut game.world.query::<(&Position, &Team, &Animation)>() {
             let suffix = format!("{}{}", anim.dir.0, (anim.frame as u32 / 18));
@@ -526,6 +525,7 @@ async fn main() {
                 format!("player{}{}", team.0, suffix).to_owned(),
                 pos.0.x - offs_x - 25., // hardcoded anchor
                 pos.0.y - offs_y - 37., // hardcoded anchor
+                pos.0.y,
             ));
             draw_texture(
                 textures.get(&format!("players{}", suffix)),
@@ -540,6 +540,7 @@ async fn main() {
             "ball".to_owned(),
             ball_pos.0.x - offs_x - 12.5,
             ball_pos.0.y - offs_y - 12.5,
+            ball_pos.0.y,
         ));
         draw_texture(
             textures.get("balls"),
@@ -548,11 +549,11 @@ async fn main() {
             WHITE,
         );
 
-        sprites.sort_unstable_by(|(_, _, y1), (_, _, y2)| {
+        sprites.sort_unstable_by(|(_, _, _, y1), (_, _, _, y2)| {
             y1.partial_cmp(y2).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        for (key, x, y) in sprites {
+        for (key, x, y, _) in sprites {
             draw_texture(textures.get(&key), x, y, WHITE);
         }
 
