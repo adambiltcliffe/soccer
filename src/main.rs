@@ -345,6 +345,7 @@ impl Game {
                 target.speed = HUMAN_PLAYER_WITHOUT_BALL_SPEED;
                 target.pos = pos.0 + my_team.controls.unwrap().movement();
             }
+            // todo all of the other player behaviours
         }
     }
 
@@ -420,9 +421,12 @@ fn update_players(world: &mut World, ball: Entity) {
         } else {
             let vector = vector.with_max_length(target.speed);
             target_dir = Angle::from_vec(vector);
-            // todo: should do the allow_movement thing to slide here
-            // instead do this
-            pos.0 += vector;
+            if allow_movement(pos.0.x + vector.x, pos.0.y) {
+                pos.0.x += vector.x;
+            }
+            if allow_movement(pos.0.x, pos.0.y + vector.y) {
+                pos.0.y += vector.y;
+            }
             anim.frame += vector.length().max(3.0); // todo tweak this
             anim.frame %= 72.0;
         }
@@ -447,6 +451,21 @@ fn window_conf() -> Conf {
         window_resizable: false,
         ..Default::default()
     };
+}
+
+fn allow_movement(x: f32, y: f32) -> bool {
+    if (x - HALF_LEVEL_W).abs() > HALF_LEVEL_W {
+        // Trying to walk off the left or right side of the level
+        false
+    } else if (x - HALF_LEVEL_W).abs() < HALF_GOAL_W + 20.0 {
+        // Player is within the bounds of the goals on the X axis, don't let them walk into, through or behind the goal
+        // +20 takes with of player sprite into account
+        return (y - HALF_LEVEL_H).abs() < HALF_PITCH_H;
+    } else {
+        // Player is outside the bounds of the goals on the X axis, so they can walk off the pitch and to the edge
+        // of the level
+        (y - HALF_LEVEL_H).abs() < HALF_LEVEL_H
+    }
 }
 
 struct Textures(HashMap<String, Texture2D>);
@@ -476,6 +495,8 @@ async fn main() {
     textures.preload("balls").await;
     textures.preload("arrow0").await;
     textures.preload("arrow1").await;
+    textures.preload("goal0").await;
+    textures.preload("goal1").await;
     for d in 0..=7 {
         for f in 0..=4 {
             textures.preload(format!("player0{}{}", d, f)).await;
@@ -588,6 +609,7 @@ async fn main() {
             );
         }
 
+        // draw ball
         let ball_pos = &*game.world.get::<Position>(game.ball).unwrap();
         sprites.push((
             "ball".to_owned(),
@@ -601,6 +623,20 @@ async fn main() {
             ball_pos.0.y - offs_y - 12.5,
             WHITE,
         );
+
+        // draw goals
+        sprites.push((
+            "goal0".to_owned(),
+            HALF_LEVEL_W - offs_x - 100.0,
+            0.0 - offs_y - 81.0,
+            0.0,
+        ));
+        sprites.push((
+            "goal1".to_owned(),
+            HALF_LEVEL_W - offs_x - 100.0,
+            LEVEL_H - offs_y - 125.0,
+            LEVEL_H,
+        ));
 
         sprites.sort_unstable_by(|(_, _, _, y1), (_, _, _, y2)| {
             y1.partial_cmp(y2).unwrap_or(std::cmp::Ordering::Equal)
