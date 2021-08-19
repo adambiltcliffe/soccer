@@ -103,7 +103,7 @@ const HUMAN_PLAYER_WITH_BALL_SPEED: f32 = 3.0;
 const HUMAN_PLAYER_WITHOUT_BALL_SPEED: f32 = 3.3;
 const MAX_SPEED: f32 = 10.0;
 
-const GOALS_TO_WIN: u8 = 2;
+const GOALS_TO_WIN: u8 = 9;
 
 /*
 DEBUG_SHOW_LEADS = False
@@ -452,7 +452,7 @@ fn update_players(world: &mut World, ball: Entity) {
             if allow_movement(pos.0.x, pos.0.y + vector.y) {
                 pos.0.y += vector.y;
             }
-            anim.frame += vector.length().max(3.0); // todo tweak this
+            anim.frame += vector.length().min(4.5);
             anim.frame %= 72.0;
         }
         let dir_diff = target_dir.0 - anim.dir.0;
