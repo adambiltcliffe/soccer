@@ -103,6 +103,8 @@ const HUMAN_PLAYER_WITH_BALL_SPEED: f32 = 3.0;
 const HUMAN_PLAYER_WITHOUT_BALL_SPEED: f32 = 3.3;
 const MAX_SPEED: f32 = 10.0;
 
+const GOALS_TO_WIN: u8 = 2;
+
 /*
 DEBUG_SHOW_LEADS = False
 DEBUG_SHOW_TARGETS = False
@@ -281,6 +283,8 @@ struct Game {
     ball: Entity,
     ball_owner: Option<Entity>,
     teams: [TeamInfo; 2],
+    scoring_team: usize,
+    score_timer: i32,
 }
 
 impl Game {
@@ -296,6 +300,8 @@ impl Game {
             ball,
             ball_owner: None,
             teams: [TeamInfo::new(None), TeamInfo::new(None)],
+            scoring_team: 1,
+            score_timer: 0,
         };
         me.add_players();
         me
@@ -307,6 +313,21 @@ impl Game {
         build_ball(&mut eb);
         self.ball = self.world.spawn(eb.build());
         self.add_players();
+        self.ball_owner = None;
+        self.camera_focus = vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32);
+    }
+
+    fn check_goals(&mut self) {
+        let ball_y = self.world.get_mut::<Position>(self.ball).unwrap().0.y;
+        self.score_timer -= 1;
+        if self.score_timer == 0 {
+            self.reset();
+        } else if self.score_timer < 0 && (ball_y - HALF_LEVEL_H).abs() > HALF_PITCH_H {
+            // todo play goal sound
+            self.scoring_team = if ball_y < HALF_LEVEL_H { 0 } else { 1 };
+            self.teams[self.scoring_team].score += 1;
+            self.score_timer = 60;
+        }
     }
 
     fn add_players(&mut self) {
@@ -323,7 +344,7 @@ impl Game {
     }
 
     fn update(&mut self) {
-        // todo check for goal scored
+        self.check_goals();
         // todo set behaviours (mark, leads, goalie)
         self.set_player_targets();
         update_players(&mut self.world, self.ball);
@@ -342,7 +363,11 @@ impl Game {
             if my_team.human() && i_am_active_player {
                 // todo check we're not frozen for kickoff
                 // todo set our speed depending on whether we have the ball
-                target.speed = HUMAN_PLAYER_WITHOUT_BALL_SPEED;
+                if self.ball_owner == Some(id) {
+                    target.speed = HUMAN_PLAYER_WITH_BALL_SPEED;
+                } else {
+                    target.speed = HUMAN_PLAYER_WITHOUT_BALL_SPEED;
+                }
                 target.pos = pos.0 + my_team.controls.unwrap().movement();
             }
             // todo all of the other player behaviours
@@ -477,7 +502,6 @@ impl Textures {
     async fn preload(&mut self, key: impl Into<String>) {
         let key: String = key.into();
         let texture = load_texture(&format!("images/{}.png", key)).await.unwrap();
-        println!("Loaded texture: {}", key);
         self.0.insert(key, texture);
     }
     fn get(&self, key: &str) -> Texture2D {
@@ -495,8 +519,12 @@ async fn main() {
     textures.preload("balls").await;
     textures.preload("arrow0").await;
     textures.preload("arrow1").await;
+    textures.preload("goal").await;
     textures.preload("goal0").await;
     textures.preload("goal1").await;
+    textures.preload("bar").await;
+    textures.preload("over0").await;
+    textures.preload("over1").await;
     for d in 0..=7 {
         for f in 0..=4 {
             textures.preload(format!("player0{}{}", d, f)).await;
@@ -506,6 +534,11 @@ async fn main() {
     }
     for k in vec!["01", "02", "10", "11", "12"] {
         textures.preload(format!("menu{}", k)).await;
+    }
+    for k in 0..=9 {
+        textures.preload(format!("s{}", k)).await;
+        textures.preload(format!("l0{}", k)).await;
+        textures.preload(format!("l1{}", k)).await;
     }
     // todo set up sound
     let mut state = State::Menu(MenuState::NumPlayers, Settings::new());
@@ -576,12 +609,23 @@ async fn main() {
                         }
                     }
                 }
+                game.update();
             }
-            State::Play => (),
-            State::GameOver => (),
+            State::Play => {
+                if game.teams[0].score.max(game.teams[1].score) == GOALS_TO_WIN
+                    && game.score_timer == 1
+                {
+                    state = State::GameOver;
+                }
+                game.update();
+            }
+            State::GameOver => {
+                if is_key_pressed(KeyCode::Space) {
+                    state = State::Menu(MenuState::NumPlayers, Settings::new());
+                    Game::new(get_difficulty(DifficultyLevel::Hard));
+                }
+            }
         }
-
-        game.update();
 
         let offs_x = (game.camera_focus.x - WIDTH as f32 / 2.)
             .min(LEVEL_W - WIDTH)
@@ -674,13 +718,43 @@ async fn main() {
                 draw_texture(textures.get(&key), 0.0, 0.0, WHITE);
             }
             State::Play => {
-                // todo display score bar at top
-                // todo show score for each team
-                // todo show GOAL if a goal has recently been scored
+                draw_texture(textures.get("bar"), HALF_WINDOW_WIDTH - 176., 0., WHITE);
+                for i in 0..=1 {
+                    draw_texture(
+                        textures.get(&format!("s{}", game.teams[i].score)),
+                        HALF_WINDOW_WIDTH + 7. - 39. * i as f32,
+                        6.,
+                        WHITE,
+                    );
+                }
+                if game.score_timer > 0 {
+                    draw_texture(
+                        textures.get("goal"),
+                        HALF_WINDOW_WIDTH - 300.,
+                        HEIGHT / 2. - 88.,
+                        WHITE,
+                    );
+                }
             }
             State::GameOver => {
-                // todo display GAME OVER image
-                // todo show score for each team
+                draw_texture(
+                    textures.get(if game.teams[0].score > game.teams[1].score {
+                        "over0"
+                    } else {
+                        "over1"
+                    }),
+                    0.0,
+                    0.0,
+                    WHITE,
+                );
+                for i in 0..=1 {
+                    draw_texture(
+                        textures.get(&format!("l{}{}", i, game.teams[i].score)),
+                        HALF_WINDOW_WIDTH + 25. - 125. * i as f32,
+                        144.,
+                        WHITE,
+                    );
+                }
             }
         }
         next_frame().await;
