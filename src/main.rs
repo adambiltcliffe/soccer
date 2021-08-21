@@ -40,6 +40,8 @@ impl Animation {
     }
 }
 
+struct Timer(i8);
+
 const HEIGHT: f32 = 480.0;
 const WIDTH: f32 = 800.0;
 
@@ -170,7 +172,7 @@ struct Difficulty {
     goalie_enabled: bool,
     second_lead_enabled: bool,
     speed_boost: f32,
-    holdoff_timer: i32,
+    holdoff_timer: i8,
 }
 
 fn get_difficulty(level: DifficultyLevel) -> Difficulty {
@@ -344,6 +346,11 @@ impl Game {
     }
 
     fn update(&mut self) {
+        for (_, t) in &mut self.world.query::<&mut Timer>() {
+            if t.0 > 0 {
+                t.0 -= 1
+            }
+        }
         self.check_goals();
         // todo set behaviours (mark, leads, goalie)
         self.set_player_targets();
@@ -376,6 +383,7 @@ impl Game {
 
     fn update_ball(&mut self) {
         let mut ball_pos = self.world.get_mut::<Position>(self.ball).unwrap();
+        let mut old_owner = None;
         let owner_team: Option<u8>;
         match self.ball_owner {
             None => {
@@ -400,18 +408,26 @@ impl Game {
             }
         }
         // search for a player that can acquire the ball
-        for (id, (player_pos, team)) in &mut self.world.query::<(&Position, &Team)>() {
-            // todo can only acquire the ball if the player's holdoff timer is not set
+        for (id, (player_pos, team, timer)) in &mut self.world.query::<(&Position, &Team, &Timer)>()
+        {
             if (owner_team.is_none() || owner_team.unwrap() != team.0)
                 && (ball_pos.0 - player_pos.0).length() <= DRIBBLE_DIST_X
+                && timer.0 == 0
             {
+                old_owner = self.ball_owner;
                 // acquire the ball
-                // todo set previous owner's holdoff timer to 60
-                // todo set ball's timer so that computer can't shoot
                 self.ball_owner = Some(id);
                 self.teams[team.0 as usize].active_player = Some(id);
+                // set ball's timer so the computer can't shoot immediately
+                let mut ball_timer = self.world.get_mut::<Timer>(self.ball).unwrap();
+                ball_timer.0 = self.difficulty.holdoff_timer;
             }
         }
+        // if someone lost the ball, set their timer so they can't reacquire it
+        old_owner.map(|owner| {
+            let mut owner_timer = self.world.get_mut::<Timer>(owner).unwrap();
+            owner_timer.0 = 60;
+        });
         // todo if the ball has an owner, maybe kick it
         // finally update camera position
         self.camera_focus += (ball_pos.0 - self.camera_focus).with_max_length(8.0);
@@ -420,6 +436,7 @@ impl Game {
 
 fn build_ball(eb: &mut EntityBuilder) {
     eb.add(Position(vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32)));
+    eb.add(Timer(0));
     eb.add(Ball);
 }
 
@@ -431,6 +448,7 @@ fn build_player(eb: &mut EntityBuilder, x: f32, y: f32, offs: f32, team: u8) {
     eb.add(Position(start.clone()));
     eb.add(Target::new(start));
     eb.add(Team(team));
+    eb.add(Timer(0));
     eb.add(Animation::new());
 }
 
