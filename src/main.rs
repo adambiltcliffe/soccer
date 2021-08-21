@@ -59,14 +59,16 @@ const GOAL_WIDTH: f32 = 186.0;
 const GOAL_DEPTH: f32 = 20.0;
 const HALF_GOAL_W: f32 = GOAL_WIDTH / 2.0;
 
+const PITCH_BOUNDS_X: (f32, f32) = (HALF_LEVEL_W - HALF_PITCH_W, HALF_LEVEL_W + HALF_PITCH_W);
+const PITCH_BOUNDS_Y: (f32, f32) = (HALF_LEVEL_H - HALF_PITCH_H, HALF_LEVEL_H + HALF_PITCH_H);
+
+const GOAL_BOUNDS_X: (f32, f32) = (HALF_LEVEL_W - HALF_GOAL_W, HALF_LEVEL_W + HALF_GOAL_W);
+const GOAL_BOUNDS_Y: (f32, f32) = (
+    HALF_LEVEL_H - HALF_PITCH_H - GOAL_DEPTH,
+    HALF_LEVEL_H + HALF_PITCH_H + GOAL_DEPTH,
+);
+
 /*
-PITCH_BOUNDS_X = (HALF_LEVEL_W - HALF_PITCH_W, HALF_LEVEL_W + HALF_PITCH_W)
-PITCH_BOUNDS_Y = (HALF_LEVEL_H - HALF_PITCH_H, HALF_LEVEL_H + HALF_PITCH_H)
-
-GOAL_BOUNDS_X = (HALF_LEVEL_W - HALF_GOAL_W, HALF_LEVEL_W + HALF_GOAL_W)
-GOAL_BOUNDS_Y = (HALF_LEVEL_H - HALF_PITCH_H - GOAL_DEPTH,
-                 HALF_LEVEL_H + HALF_PITCH_H + GOAL_DEPTH)
-
 PITCH_RECT = pygame.rect.Rect(PITCH_BOUNDS_X[0], PITCH_BOUNDS_Y[0], HALF_PITCH_W * 2, HALF_PITCH_H * 2)
 GOAL_0_RECT = pygame.rect.Rect(GOAL_BOUNDS_X[0], GOAL_BOUNDS_Y[0], GOAL_WIDTH, GOAL_DEPTH)
 GOAL_1_RECT = pygame.rect.Rect(GOAL_BOUNDS_X[0], GOAL_BOUNDS_Y[1] - GOAL_DEPTH, GOAL_WIDTH, GOAL_DEPTH)
@@ -76,6 +78,9 @@ AI_MAX_X = LEVEL_W - 78
 AI_MIN_Y = 98
 AI_MAX_Y = LEVEL_H - 98
 */
+
+const KICK_STRENGTH: f32 = 11.5;
+const DRAG: f32 = 0.98;
 
 const PLAYER_START_POS: [(f32, f32); 7] = [
     (350., 550.),
@@ -198,6 +203,7 @@ fn get_difficulty(level: DifficultyLevel) -> Difficulty {
     }
 }
 
+#[derive(Copy, Clone)]
 struct Angle(i32);
 
 impl Angle {
@@ -387,7 +393,22 @@ impl Game {
         let owner_team: Option<u8>;
         match self.ball_owner {
             None => {
-                // todo run physics
+                let bounds_x = if (ball_pos.0.y - HALF_LEVEL_H).abs() > HALF_PITCH_H {
+                    GOAL_BOUNDS_X
+                } else {
+                    PITCH_BOUNDS_X
+                };
+                let bounds_y = if (ball_pos.0.x - HALF_LEVEL_W).abs() < HALF_GOAL_W {
+                    GOAL_BOUNDS_Y
+                } else {
+                    PITCH_BOUNDS_Y
+                };
+                // todo run physics properly see lines 281-298
+                let vel = *self.world.get::<Vector>(self.ball).unwrap();
+                let (px, vx) = ball_physics(ball_pos.0.x, vel.x, bounds_x);
+                let (py, vy) = ball_physics(ball_pos.0.y, vel.y, bounds_y);
+                ball_pos.0 = vec2(px, py);
+                *self.world.get_mut::<Vector>(self.ball).unwrap() = vec2(vx, vy);
                 owner_team = None;
             }
             Some(owner_id) => {
@@ -407,35 +428,68 @@ impl Game {
                 owner_team = Some(self.world.get::<Team>(owner_id).unwrap().0);
             }
         }
+        // update camera while we still have the ball position uniquely borrowed
+        self.camera_focus += (ball_pos.0 - self.camera_focus).with_max_length(8.0);
+        drop(ball_pos);
+        let ball_pos = self.world.get::<Position>(self.ball).unwrap().0;
         // search for a player that can acquire the ball
+        let mut ball_was_acquired = false;
         for (id, (player_pos, team, timer)) in &mut self.world.query::<(&Position, &Team, &Timer)>()
         {
             if (owner_team.is_none() || owner_team.unwrap() != team.0)
-                && (ball_pos.0 - player_pos.0).length() <= DRIBBLE_DIST_X
+                && (ball_pos - player_pos.0).length() <= DRIBBLE_DIST_X
                 && timer.0 == 0
             {
                 old_owner = self.ball_owner;
                 // acquire the ball
                 self.ball_owner = Some(id);
                 self.teams[team.0 as usize].active_player = Some(id);
-                // set ball's timer so the computer can't shoot immediately
-                let mut ball_timer = self.world.get_mut::<Timer>(self.ball).unwrap();
-                ball_timer.0 = self.difficulty.holdoff_timer;
+                ball_was_acquired = true;
             }
+        }
+        if ball_was_acquired {
+            if old_owner.is_none() {
+                self.world.remove_one::<Vector>(self.ball).unwrap();
+            }
+            // set ball's timer so the computer can't shoot immediately
+            let mut ball_timer = self.world.get_mut::<Timer>(self.ball).unwrap();
+            ball_timer.0 = self.difficulty.holdoff_timer;
         }
         // if someone lost the ball, set their timer so they can't reacquire it
         old_owner.map(|owner| {
             let mut owner_timer = self.world.get_mut::<Timer>(owner).unwrap();
             owner_timer.0 = 60;
         });
-        // todo if the ball has an owner, maybe kick it
-        // finally update camera position
-        self.camera_focus += (ball_pos.0 - self.camera_focus).with_max_length(8.0);
+        // if the ball has an owner, maybe kick it
+        match self.ball_owner {
+            None => (),
+            Some(owner_id) => {
+                let owner_team = &self.teams[self.world.get::<Team>(owner_id).unwrap().0 as usize];
+                let do_shoot;
+                if owner_team.human() {
+                    do_shoot = is_key_pressed(owner_team.controls.unwrap().shoot)
+                } else {
+                    // todo logic for when computer players shoot
+                    do_shoot = false;
+                }
+                if do_shoot {
+                    // todo shots should target players or goals and not just go straight ahead
+                    let shoot_dir = self.world.get::<Animation>(owner_id).unwrap().dir;
+                    self.world.get_mut::<Timer>(owner_id).unwrap().0 = 10;
+                    self.ball_owner = None;
+                    self.world
+                        .insert_one(self.ball, Angle::to_vec(shoot_dir) * KICK_STRENGTH)
+                        .unwrap();
+                    // todo if we kicked towards a player, make that player active now
+                }
+            }
+        }
     }
 }
 
 fn build_ball(eb: &mut EntityBuilder) {
     eb.add(Position(vec2(HALF_LEVEL_W as f32, HALF_LEVEL_H as f32)));
+    eb.add::<Vector>(vec2(0.0, 0.0));
     eb.add(Timer(0));
     eb.add(Ball);
 }
@@ -484,6 +538,17 @@ fn avg(a: f32, b: f32) -> f32 {
     } else {
         (a + b) / 2.0
     }
+}
+
+fn ball_physics(pos: f32, vel: f32, bounds: (f32, f32)) -> (f32, f32) {
+    let mut pos = pos;
+    let mut vel = vel;
+    pos += vel;
+    if pos < bounds.0 || pos > bounds.1 {
+        pos -= vel;
+        vel = -vel;
+    }
+    (pos, vel * DRAG)
 }
 
 fn window_conf() -> Conf {
