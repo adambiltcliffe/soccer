@@ -9,7 +9,7 @@ enum PixelUnit {}
 
 type Vector = Vector2D<f32, PixelUnit>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct Position(Vector);
 struct Home(Vector);
 struct Team(u8);
@@ -264,6 +264,21 @@ enum MenuChange {
     NoChange,
 }
 
+#[derive(Debug)]
+enum ShootTarget {
+    Goal(Position),
+    Player(Position, Entity),
+}
+
+impl ShootTarget {
+    fn position(&self) -> Position {
+        match self {
+            Self::Goal(p) => *p,
+            Self::Player(p, _) => *p,
+        }
+    }
+}
+
 struct TeamInfo {
     controls: Option<Controls>,
     score: u8,
@@ -293,6 +308,7 @@ struct Game {
     teams: [TeamInfo; 2],
     scoring_team: usize,
     score_timer: i32,
+    debug_shoot_target: Option<Vector>,
 }
 
 impl Game {
@@ -310,6 +326,7 @@ impl Game {
             teams: [TeamInfo::new(None), TeamInfo::new(None)],
             scoring_team: 1,
             score_timer: 0,
+            debug_shoot_target: None,
         };
         me.add_players();
         me
@@ -403,7 +420,6 @@ impl Game {
                 } else {
                     PITCH_BOUNDS_Y
                 };
-                // todo run physics properly see lines 281-298
                 let vel = *self.world.get::<Vector>(self.ball).unwrap();
                 let (px, vx) = ball_physics(ball_pos.0.x, vel.x, bounds_x);
                 let (py, vy) = ball_physics(ball_pos.0.y, vel.y, bounds_y);
@@ -461,10 +477,44 @@ impl Game {
             owner_timer.0 = 60;
         });
         // if the ball has an owner, maybe kick it
+        self.debug_shoot_target = None;
         match self.ball_owner {
             None => (),
             Some(owner_id) => {
-                let owner_team = &self.teams[self.world.get::<Team>(owner_id).unwrap().0 as usize];
+                let owner_team_id = self.world.get::<Team>(owner_id).unwrap().0;
+                let owner_team = &self.teams[owner_team_id as usize];
+                let owner_pos = self.world.get::<Position>(owner_id).unwrap().0;
+                // possible targets are all the other players on owner's team ...
+                let mut targets: Vec<ShootTarget> = self
+                    .world
+                    .query::<(&Team, &Position)>()
+                    .iter()
+                    .filter(|(id, _)| id != &owner_id)
+                    .filter(|(_, (t, _))| t.0 == owner_team_id)
+                    .map(|(id, (_, p))| ShootTarget::Player(*p, id))
+                    .collect();
+                // ... plus the opposing goal
+                // todo: if owner is a computer, filter out interceptable passes
+                targets.push(ShootTarget::Goal(Position(vec2(
+                    HALF_LEVEL_W,
+                    owner_team_id as f32 * LEVEL_H,
+                ))));
+                targets.retain(|st| {
+                    let shoot_vec = st.position().0 - owner_pos;
+                    if shoot_vec.length() <= 0.0 || shoot_vec.length() >= 300.0 {
+                        return false;
+                    }
+                    let source_dir = self.world.get::<Animation>(owner_id).unwrap().dir;
+                    shoot_vec.normalize().dot(Angle::to_vec(source_dir)) > 0.8
+                });
+                // this is a mess because f32 doesn't implement Ord
+                let best_target = targets.iter().min_by(|a, b| {
+                    (a.position().0 - owner_pos)
+                        .length()
+                        .partial_cmp(&(b.position().0 - owner_pos).length())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                self.debug_shoot_target = best_target.map(|st| st.position().0);
                 let do_shoot;
                 if owner_team.human() {
                     do_shoot = is_key_pressed(owner_team.controls.unwrap().shoot)
@@ -550,6 +600,12 @@ fn ball_physics(pos: f32, vel: f32, bounds: (f32, f32)) -> (f32, f32) {
     }
     (pos, vel * DRAG)
 }
+
+/*
+fn dist_key(v1: Vector) -> Box<dyn FnMut(Vector) -> f32> {
+    Box::new(|v2| (v1 - v2).length())
+}
+*/
 
 fn window_conf() -> Conf {
     return Conf {
@@ -840,6 +896,22 @@ async fn main() {
                 }
             }
         }
+
+        match (game.debug_shoot_target, game.ball_owner) {
+            (Some(v1), Some(owner_id)) => {
+                let v2 = game.world.get::<Position>(owner_id).unwrap().0;
+                draw_line(
+                    v1.x - offs_x,
+                    v1.y - offs_y,
+                    v2.x - offs_x,
+                    v2.y - offs_y,
+                    2.0,
+                    MAGENTA,
+                );
+            }
+            _ => (),
+        }
+
         next_frame().await;
     }
 }
