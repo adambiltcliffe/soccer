@@ -68,11 +68,15 @@ const GOAL_BOUNDS_Y: (f32, f32) = (
     HALF_LEVEL_H + HALF_PITCH_H + GOAL_DEPTH,
 );
 
-/*
-PITCH_RECT = pygame.rect.Rect(PITCH_BOUNDS_X[0], PITCH_BOUNDS_Y[0], HALF_PITCH_W * 2, HALF_PITCH_H * 2)
-GOAL_0_RECT = pygame.rect.Rect(GOAL_BOUNDS_X[0], GOAL_BOUNDS_Y[0], GOAL_WIDTH, GOAL_DEPTH)
-GOAL_1_RECT = pygame.rect.Rect(GOAL_BOUNDS_X[0], GOAL_BOUNDS_Y[1] - GOAL_DEPTH, GOAL_WIDTH, GOAL_DEPTH)
+fn on_pitch(x: f32, y: f32) -> bool {
+    (x >= PITCH_BOUNDS_X.0 && x < PITCH_BOUNDS_X.1 && y >= PITCH_BOUNDS_Y.0 && y < PITCH_BOUNDS_Y.1)
+        || (x >= GOAL_BOUNDS_X.0
+            && x < GOAL_BOUNDS_X.1
+            && y >= GOAL_BOUNDS_Y.0
+            && y < GOAL_BOUNDS_Y.1)
+}
 
+/*
 AI_MIN_X = 78
 AI_MAX_X = LEVEL_W - 78
 AI_MIN_Y = 98
@@ -417,6 +421,7 @@ impl Game {
     }
 
     fn update_ball(&mut self) {
+        let mut tmp_new_ball_vector = None;
         let mut ball_pos = self.world.get_mut::<Position>(self.ball).unwrap();
         let mut old_owner = None;
         let owner_team: Option<u8>;
@@ -452,15 +457,29 @@ impl Game {
                     ball_pos.0.y,
                     owner_pos.0.y - DRIBBLE_DIST_Y * owner_anim.dir.cos(),
                 );
-                // todo check ball doesn't go off pitch
+                // check ball doesn't go off pitch
+                if on_pitch(new_x, new_y) {
+                    ball_pos.0 = vec2(new_x, new_y);
+                } else {
+                    // player dribbled off the pitch so they lose the ball
+                    self.ball_owner = None;
+                    self.world.get_mut::<Timer>(owner_id).unwrap().0 = 60;
+                    tmp_new_ball_vector = Some(Angle::to_vec(owner_anim.dir) * 3.0);
+                }
                 // todo make sure you can't score by dribbling past the goal
-                ball_pos.0 = vec2(new_x, new_y);
                 owner_team = Some(self.world.get::<Team>(owner_id).unwrap().0);
             }
         }
         // update camera while we still have the ball position uniquely borrowed
         self.camera_focus += (ball_pos.0 - self.camera_focus).with_max_length(8.0);
         drop(ball_pos);
+
+        if tmp_new_ball_vector.is_some() {
+            self.world
+                .insert_one(self.ball, tmp_new_ball_vector.unwrap())
+                .unwrap();
+        }
+
         let ball_pos = self.world.get::<Position>(self.ball).unwrap().0;
         // search for a player that can acquire the ball
         let mut ball_was_acquired = false;
