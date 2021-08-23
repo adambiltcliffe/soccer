@@ -314,6 +314,7 @@ struct Game {
     scoring_team: usize,
     score_timer: i32,
     debug_shoot_target: Option<Vector>,
+    shoot_now: [bool; 2],
 }
 
 impl Game {
@@ -333,6 +334,7 @@ impl Game {
             scoring_team: 1,
             score_timer: 0,
             debug_shoot_target: None,
+            shoot_now: [false, false],
         };
         me.add_players();
         me
@@ -392,7 +394,7 @@ impl Game {
         self.set_player_targets();
         update_players(&mut self.world, self.ball);
         self.update_ball();
-        // todo handle team switching
+        self.switch_players();
     }
 
     fn set_player_targets(&mut self) {
@@ -506,6 +508,7 @@ impl Game {
             owner_timer.0 = 60;
         });
         // if the ball has an owner, maybe kick it
+        self.shoot_now = [false, false];
         self.debug_shoot_target = None;
         match self.ball_owner {
             None => (),
@@ -549,6 +552,7 @@ impl Game {
                     // todo logic for when computer players shoot
                     do_shoot = false;
                 }
+                self.shoot_now[owner_team_id as usize] = do_shoot;
                 if do_shoot {
                     let shoot_vec;
                     match best_target {
@@ -595,6 +599,27 @@ impl Game {
                     self.world
                         .insert_one(self.ball, shoot_vec.normalize() * KICK_STRENGTH)
                         .unwrap();
+                }
+            }
+        }
+    }
+
+    fn switch_players(&mut self) {
+        for t in 0..=1 {
+            if !self.shoot_now[t] {
+                if let Some(controls) = self.teams[t].controls {
+                    if is_key_pressed(controls.shoot) {
+                        let ball_pos = self.world.get::<Position>(self.ball).unwrap().0;
+                        // switch control to the nearest player to the ball
+                        // todo if the opposing team own the ball, prefer upfield
+                        self.teams[t].active_player = self
+                            .world
+                            .query::<(&Team, &Position)>()
+                            .iter()
+                            .filter(|(_, (tn, _))| tn.0 as usize == t)
+                            .min_by(|a, b| cmp_dist(((a.1).1).0, ((b.1).1).0, ball_pos))
+                            .map(|(id, _)| id);
+                    }
                 }
             }
         }
