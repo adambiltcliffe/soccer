@@ -305,6 +305,7 @@ struct Game {
     world: World,
     ball: Entity,
     ball_owner: Option<Entity>,
+    kickoff_player: Option<Entity>,
     teams: [TeamInfo; 2],
     scoring_team: usize,
     score_timer: i32,
@@ -323,6 +324,7 @@ impl Game {
             world,
             ball,
             ball_owner: None,
+            kickoff_player: None,
             teams: [TeamInfo::new(None), TeamInfo::new(None)],
             scoring_team: 1,
             score_timer: 0,
@@ -366,6 +368,13 @@ impl Game {
         }
         self.teams[0].active_player = Some(ids[0]);
         self.teams[1].active_player = Some(ids[1]);
+        let kickoff_team = 1 - self.scoring_team;
+        let kp = ids[kickoff_team];
+        self.kickoff_player = Some(kp);
+        self.world.get_mut::<Position>(kp).unwrap().0 = vec2(
+            HALF_LEVEL_W - 30.0 + kickoff_team as f32 * 60.0,
+            HALF_LEVEL_H,
+        );
     }
 
     fn update(&mut self) {
@@ -385,6 +394,10 @@ impl Game {
     fn set_player_targets(&mut self) {
         for (id, (pos, team, target)) in &mut self.world.query::<(&Position, &Team, &mut Target)>()
         {
+            if self.kickoff_player.is_some() && self.kickoff_player.unwrap() != id {
+                target.pos = pos.0;
+                continue;
+            }
             let my_team = &self.teams[team.0 as usize];
             let i_am_active_player = match my_team.active_player {
                 None => false,
@@ -427,6 +440,7 @@ impl Game {
                 owner_team = None;
             }
             Some(owner_id) => {
+                self.kickoff_player = None;
                 // calculate new position based on dribbling
                 let owner_pos = &*self.world.get::<Position>(owner_id).unwrap();
                 let owner_anim = &*self.world.get::<Animation>(owner_id).unwrap();
