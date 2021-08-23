@@ -392,7 +392,6 @@ impl Game {
             };
             if my_team.human() && i_am_active_player {
                 // todo check we're not frozen for kickoff
-                // todo set our speed depending on whether we have the ball
                 if self.ball_owner == Some(id) {
                     target.speed = HUMAN_PLAYER_WITH_BALL_SPEED;
                 } else {
@@ -483,7 +482,9 @@ impl Game {
             Some(owner_id) => {
                 let owner_team_id = self.world.get::<Team>(owner_id).unwrap().0;
                 let owner_team = &self.teams[owner_team_id as usize];
+                let owner_team_human = owner_team.human();
                 let owner_pos = self.world.get::<Position>(owner_id).unwrap().0;
+                let owner_dir = self.world.get::<Animation>(owner_id).unwrap().dir;
                 // possible targets are all the other players on owner's team ...
                 let mut targets: Vec<ShootTarget> = self
                     .world
@@ -523,12 +524,41 @@ impl Game {
                     do_shoot = false;
                 }
                 if do_shoot {
+                    let shoot_vec;
+                    match best_target {
+                        Some(t) => {
+                            match t {
+                                ShootTarget::Player(_, id) => {
+                                    self.teams[owner_team_id as usize].active_player = Some(*id);
+                                }
+                                _ => (),
+                            }
+                            if owner_team_human
+                                && matches!(best_target, Some(ShootTarget::Player(_, _)))
+                            {
+                                let mut lead = 0.0;
+                                let mut targ = t.position().0;
+                                for _ in 1..=8 {
+                                    targ = t.position().0 + Angle::to_vec(owner_dir) * lead;
+                                    let length = (targ - owner_pos).length();
+                                    lead = HUMAN_PLAYER_WITHOUT_BALL_SPEED * steps(length) as f32;
+                                }
+                                shoot_vec = targ - owner_pos;
+                            } else {
+                                shoot_vec = t.position().0 - owner_pos;
+                            }
+                        }
+                        None => {
+                            shoot_vec =
+                                Angle::to_vec(self.world.get::<Animation>(owner_id).unwrap().dir);
+                            // todo take a guess at which player we should activate
+                        }
+                    }
                     // todo shots should target players or goals and not just go straight ahead
-                    let shoot_dir = self.world.get::<Animation>(owner_id).unwrap().dir;
                     self.world.get_mut::<Timer>(owner_id).unwrap().0 = 10;
                     self.ball_owner = None;
                     self.world
-                        .insert_one(self.ball, Angle::to_vec(shoot_dir) * KICK_STRENGTH)
+                        .insert_one(self.ball, shoot_vec.normalize() * KICK_STRENGTH)
                         .unwrap();
                     // todo if we kicked towards a player, make that player active now
                 }
@@ -599,6 +629,14 @@ fn ball_physics(pos: f32, vel: f32, bounds: (f32, f32)) -> (f32, f32) {
         vel = -vel;
     }
     (pos, vel * DRAG)
+}
+
+fn steps(distance: f32) -> i32 {
+    if distance < 574.0 {
+        ((1.0 - (distance * (1.0 - DRAG)) / KICK_STRENGTH).log(DRAG)).ceil() as i32
+    } else {
+        190 // ball comes to rest after 190 frames having travelled 574 pixels
+    }
 }
 
 /*
@@ -682,6 +720,7 @@ async fn main() {
     // todo set up sound
     let mut state = State::Menu(MenuState::NumPlayers, Settings::new());
     let mut game = Game::new(get_difficulty(DifficultyLevel::Hard));
+    let mut debug_draw = false;
     loop {
         match state {
             State::Menu(ref mut menu_state, ref mut settings) => {
@@ -764,6 +803,10 @@ async fn main() {
                     Game::new(get_difficulty(DifficultyLevel::Hard));
                 }
             }
+        }
+
+        if is_key_pressed(KeyCode::F1) {
+            debug_draw = !debug_draw;
         }
 
         let offs_x = (game.camera_focus.x - WIDTH as f32 / 2.)
@@ -897,21 +940,32 @@ async fn main() {
             }
         }
 
-        match (game.debug_shoot_target, game.ball_owner) {
-            (Some(v1), Some(owner_id)) => {
-                let v2 = game.world.get::<Position>(owner_id).unwrap().0;
-                draw_line(
-                    v1.x - offs_x,
-                    v1.y - offs_y,
-                    v2.x - offs_x,
-                    v2.y - offs_y,
-                    2.0,
-                    MAGENTA,
-                );
+        if debug_draw {
+            // show player movement targets
+            for (_, (pos, target)) in &mut game.world.query::<(&Position, &Target)>() {
+                debug_draw_line(offs_x, offs_y, pos.0, target.pos, 1.0, RED);
             }
-            _ => (),
+            // show shoot target
+            match (game.debug_shoot_target, game.ball_owner) {
+                (Some(v1), Some(owner_id)) => {
+                    let v2 = game.world.get::<Position>(owner_id).unwrap().0;
+                    debug_draw_line(offs_x, offs_y, v1, v2, 2.0, MAGENTA);
+                }
+                _ => (),
+            }
         }
 
         next_frame().await;
     }
+}
+
+fn debug_draw_line(offs_x: f32, offs_y: f32, v1: Vector, v2: Vector, t: f32, c: Color) {
+    draw_line(
+        v1.x - offs_x,
+        v1.y - offs_y,
+        v2.x - offs_x,
+        v2.y - offs_y,
+        t,
+        c,
+    );
 }
