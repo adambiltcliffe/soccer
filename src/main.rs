@@ -439,6 +439,7 @@ impl Game {
                     owner_pos.0.y - DRIBBLE_DIST_Y * owner_anim.dir.cos(),
                 );
                 // todo check ball doesn't go off pitch
+                // todo make sure you can't score by dribbling past the goal
                 ball_pos.0 = vec2(new_x, new_y);
                 owner_team = Some(self.world.get::<Team>(owner_id).unwrap().0);
             }
@@ -559,14 +560,7 @@ impl Game {
                                 .iter()
                                 .filter(|(_, (t, _))| t.0 == owner_team_id)
                                 .map(|(id, (_, p))| (id, p))
-                                .min_by(|a, b| {
-                                    // closer((a.1).0, (b.1).0, dest)
-
-                                    ((a.1).0 - dest)
-                                        .length()
-                                        .partial_cmp(&((b.1).0 - dest).length())
-                                        .unwrap_or(std::cmp::Ordering::Equal)
-                                })
+                                .min_by(|a, b| cmp_dist((a.1).0, (b.1).0, dest))
                                 .map(|(id, _)| id);
                             self.teams[owner_team_id as usize].active_player = closest_player;
                         }
@@ -654,11 +648,12 @@ fn steps(distance: f32) -> i32 {
     }
 }
 
-/*
-fn dist_key(v1: Vector) -> Box<dyn FnMut(Vector) -> f32> {
-    Box::new(|v2| (v1 - v2).length())
+fn cmp_dist(v1: Vector, v2: Vector, dest: Vector) -> std::cmp::Ordering {
+    (v1 - dest)
+        .length()
+        .partial_cmp(&(v2 - dest).length())
+        .unwrap_or(std::cmp::Ordering::Equal)
 }
-*/
 
 fn window_conf() -> Conf {
     return Conf {
