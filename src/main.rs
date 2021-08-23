@@ -421,7 +421,7 @@ impl Game {
     }
 
     fn update_ball(&mut self) {
-        let mut tmp_new_ball_vector = None;
+        let mut new_ball_vector = None;
         let mut ball_pos = self.world.get_mut::<Position>(self.ball).unwrap();
         let mut old_owner = None;
         let owner_team: Option<u8>;
@@ -464,22 +464,18 @@ impl Game {
                     // player dribbled off the pitch so they lose the ball
                     self.ball_owner = None;
                     self.world.get_mut::<Timer>(owner_id).unwrap().0 = 60;
-                    tmp_new_ball_vector = Some(Angle::to_vec(owner_anim.dir) * 3.0);
+                    new_ball_vector = Some(Angle::to_vec(owner_anim.dir) * 3.0);
                 }
-                // todo make sure you can't score by dribbling past the goal
                 owner_team = Some(self.world.get::<Team>(owner_id).unwrap().0);
             }
         }
         // update camera while we still have the ball position uniquely borrowed
         self.camera_focus += (ball_pos.0 - self.camera_focus).with_max_length(8.0);
         drop(ball_pos);
-
-        if tmp_new_ball_vector.is_some() {
-            self.world
-                .insert_one(self.ball, tmp_new_ball_vector.unwrap())
-                .unwrap();
+        // this is an awkward consequence of choosing to add and remove the Vector component
+        if let Some(nbv) = new_ball_vector {
+            self.world.insert_one(self.ball, nbv).unwrap();
         }
-
         let ball_pos = self.world.get::<Position>(self.ball).unwrap().0;
         // search for a player that can acquire the ball
         let mut ball_was_acquired = false;
