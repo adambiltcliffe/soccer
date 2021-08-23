@@ -523,13 +523,9 @@ impl Game {
                     let source_dir = self.world.get::<Animation>(owner_id).unwrap().dir;
                     shoot_vec.normalize().dot(Angle::to_vec(source_dir)) > 0.8
                 });
-                // this is a mess because f32 doesn't implement Ord
-                let best_target = targets.iter().min_by(|a, b| {
-                    (a.position().0 - owner_pos)
-                        .length()
-                        .partial_cmp(&(b.position().0 - owner_pos).length())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                let best_target = targets
+                    .iter()
+                    .min_by(|a, b| cmp_dist(a.position().0, b.position().0, owner_pos));
                 self.debug_shoot_target = best_target.map(|st| st.position().0);
                 let do_shoot;
                 if owner_team.human() {
