@@ -551,16 +551,31 @@ impl Game {
                         None => {
                             shoot_vec =
                                 Angle::to_vec(self.world.get::<Animation>(owner_id).unwrap().dir);
-                            // todo take a guess at which player we should activate
+                            // take a guess at which player we should activate
+                            let dest = owner_pos + shoot_vec.normalize() * 250.0;
+                            let closest_player = self
+                                .world
+                                .query::<(&Team, &Position)>()
+                                .iter()
+                                .filter(|(_, (t, _))| t.0 == owner_team_id)
+                                .map(|(id, (_, p))| (id, p))
+                                .min_by(|a, b| {
+                                    // closer((a.1).0, (b.1).0, dest)
+
+                                    ((a.1).0 - dest)
+                                        .length()
+                                        .partial_cmp(&((b.1).0 - dest).length())
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                                .map(|(id, _)| id);
+                            self.teams[owner_team_id as usize].active_player = closest_player;
                         }
                     }
-                    // todo shots should target players or goals and not just go straight ahead
                     self.world.get_mut::<Timer>(owner_id).unwrap().0 = 10;
                     self.ball_owner = None;
                     self.world
                         .insert_one(self.ball, shoot_vec.normalize() * KICK_STRENGTH)
                         .unwrap();
-                    // todo if we kicked towards a player, make that player active now
                 }
             }
         }
