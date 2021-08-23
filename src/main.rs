@@ -605,19 +605,28 @@ impl Game {
     }
 
     fn switch_players(&mut self) {
+        if self.kickoff_player.is_some() {
+            return;
+        }
         for t in 0..=1 {
             if !self.shoot_now[t] {
                 if let Some(controls) = self.teams[t].controls {
                     if is_key_pressed(controls.shoot) {
                         let ball_pos = self.world.get::<Position>(self.ball).unwrap().0;
                         // switch control to the nearest player to the ball
-                        // todo if the opposing team own the ball, prefer upfield
+                        let dir_bias = if self.ball_owner.is_some() {
+                            2.0 * t as f32 - 1.0
+                        } else {
+                            0.0
+                        };
                         self.teams[t].active_player = self
                             .world
                             .query::<(&Team, &Position)>()
                             .iter()
                             .filter(|(_, (tn, _))| tn.0 as usize == t)
-                            .min_by(|a, b| cmp_dist(((a.1).1).0, ((b.1).1).0, ball_pos))
+                            .min_by(|a, b| {
+                                cmp_dist_weighted(((a.1).1).0, ((b.1).1).0, ball_pos, dir_bias)
+                            })
                             .map(|(id, _)| id);
                     }
                 }
@@ -703,6 +712,22 @@ fn cmp_dist(v1: Vector, v2: Vector, dest: Vector) -> std::cmp::Ordering {
         .length()
         .partial_cmp(&(v2 - dest).length())
         .unwrap_or(std::cmp::Ordering::Equal)
+}
+
+fn cmp_dist_weighted(v1: Vector, v2: Vector, dest: Vector, bias: f32) -> std::cmp::Ordering {
+    let l1 = (v1 - dest).length()
+        / if (v1.y - dest.y) * bias < 0.0 {
+            2.0
+        } else {
+            1.0
+        };
+    let l2 = (v2 - dest).length()
+        / if (v2.y - dest.y) * bias < 0.0 {
+            2.0
+        } else {
+            1.0
+        };
+    l1.partial_cmp(&l2).unwrap_or(std::cmp::Ordering::Equal)
 }
 
 fn window_conf() -> Conf {
