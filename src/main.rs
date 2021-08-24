@@ -14,6 +14,7 @@ struct Position(Vector);
 struct Home(Vector);
 struct Team(u8);
 struct Ball();
+struct Peer(Entity);
 
 struct Target {
     pos: Vector,
@@ -371,6 +372,9 @@ impl Game {
             ids.push(self.world.spawn(eb.build()));
             build_player(&mut eb, LEVEL_W - x, LEVEL_H - y, 150., 1);
             ids.push(self.world.spawn(eb.build()));
+        }
+        for ii in 0..14 {
+            self.world.insert_one(ids[ii], Peer(ids[13 - ii])).unwrap();
         }
         self.teams[0].active_player = Some(ids[0]);
         self.teams[1].active_player = Some(ids[1]);
@@ -1037,6 +1041,11 @@ async fn main() {
                     debug_draw_line(offs_x, offs_y, v1, v2, 2.0, MAGENTA);
                 }
                 _ => (),
+            }
+            // show peers
+            for (_, (pos, peer)) in &mut game.world.query::<(&Position, &Peer)>() {
+                let peer_pos = game.world.get::<Position>(peer.0).unwrap();
+                debug_draw_line(offs_x, offs_y, pos.0, peer_pos.0, 1.0, BLUE);
             }
         }
 
