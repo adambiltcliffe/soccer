@@ -284,6 +284,14 @@ impl ShootTarget {
     }
 }
 
+#[derive(Copy, Clone)]
+enum Mark {
+    Goal(Position),
+    Player(Entity),
+}
+
+struct Lead(Option<f32>);
+
 struct TeamInfo {
     controls: Option<Controls>,
     score: u8,
@@ -375,6 +383,9 @@ impl Game {
         }
         for ii in 0..14 {
             self.world.insert_one(ids[ii], Peer(ids[13 - ii])).unwrap();
+            self.world
+                .insert_one(ids[ii], Mark::Player(ids[13 - ii]))
+                .unwrap();
         }
         self.teams[0].active_player = Some(ids[0]);
         self.teams[1].active_player = Some(ids[1]);
@@ -394,16 +405,48 @@ impl Game {
             }
         }
         self.check_goals();
-        // todo set behaviours (mark, leads, goalie)
+        self.set_behaviours();
         self.set_player_targets();
         update_players(&mut self.world, self.ball);
         self.update_ball();
         self.switch_players();
     }
 
+    fn set_behaviours(&mut self) {
+        for (_, (peer, mark, lead)) in self.world.query_mut::<(&Peer, &mut Mark, &mut Lead)>() {
+            *mark = Mark::Player(peer.0);
+            *lead = Lead(None);
+        }
+        match self.ball_owner {
+            None => {}
+            Some(owner_id) => {
+                let defending_team = 1 - self.world.get::<Team>(owner_id).unwrap().0;
+                let goal = vec2(HALF_LEVEL_W, (1 - defending_team) as f32 * LEVEL_H);
+                if self.difficulty.goalie_enabled {
+                    // find the nearest player to the goal on each team and make them mark it
+                    let goalie = self
+                        .world
+                        .query::<(&Team, &Position)>()
+                        .iter()
+                        .filter(|(_, (t, _))| t.0 == defending_team)
+                        .min_by(|(_, (_, p1)), (_, (_, p2))| cmp_dist(p1.0, p2.0, goal))
+                        .unwrap()
+                        .0;
+                    let ball_owner_peer = self.world.get::<Peer>(owner_id).unwrap().0;
+                    let goalie_mark = *self.world.get_mut::<Mark>(goalie).unwrap();
+                    *self.world.get_mut::<Mark>(ball_owner_peer).unwrap() = goalie_mark;
+                    *self.world.get_mut::<Mark>(goalie).unwrap() = Mark::Goal(Position(goal));
+                }
+                // todo find the two leads
+            }
+        }
+    }
+
     fn set_player_targets(&mut self) {
-        for (id, (pos, team, home, target)) in
-            &mut self.world.query::<(&Position, &Team, &Home, &mut Target)>()
+        for (id, (pos, team, home, lead, mark, target)) in
+            &mut self
+                .world
+                .query::<(&Position, &Team, &Home, &Lead, &Mark, &mut Target)>()
         {
             // if we're pre-kickoff and not the kickoff player, just stand and wait
             if self.kickoff_player.is_some() && self.kickoff_player.unwrap() != id {
@@ -415,7 +458,6 @@ impl Game {
                 None => false,
                 Some(aid) => aid == id,
             };
-            let home = self.world.get::<Home>(id).unwrap().0;
             let ball_pos = self.world.get::<Position>(self.ball).unwrap().0;
             let active = (ball_pos.y - pos.0.y).abs() < 400.0;
             // choose one of the following behaviours
@@ -430,7 +472,7 @@ impl Game {
                 continue;
             }
             // set the default behaviour
-            target.pos = home;
+            target.pos = home.0;
             target.speed = PLAYER_DEFAULT_SPEED;
             match self.ball_owner {
                 Some(owner_id) if owner_id == id => {
@@ -441,12 +483,38 @@ impl Game {
                         // if my team has the ball and I'm active, go somewhere useful
                         if active {
                             let direction = if team.0 == 0 { -1. } else { 1. };
-                            target.pos = (home + (ball_pos + vec2(0.0, 400.0 * direction))) / 2.0;
+                            target.pos = (home.0 + (ball_pos + vec2(0.0, 400.0 * direction))) / 2.0;
                         }
                     } else {
-                        // todo if other team has the ball and I'm a lead, try to intercept
-                        // todo if other team has the ball, my mark is active and I'm human, run toward the ball
-                        // todo if other team has the ball, my mark is active and I'm computer, mark them
+                        match lead.0 {
+                            Some(lead_dist) => {
+                                // todo if other team has the ball and I'm a lead, try to intercept
+                            }
+                            None => {
+                                let mark_pos = match mark {
+                                    Mark::Goal(goal_pos) => goal_pos.0,
+                                    Mark::Player(mark_id) => {
+                                        self.world.get::<Position>(*mark_id).unwrap().0
+                                    }
+                                };
+                                // if our mark is inactive, do nothing (run towards home)
+                                // if active, human team players just run towards the ball, computer
+                                // players mark the designated target
+                                if (mark_pos.y - ball_pos.y).abs() < 400. {
+                                    if my_team.human() {
+                                        target.pos = ball_pos;
+                                    } else {
+                                        let mark_to_ball_vec = ball_pos - mark_pos;
+                                        let dist_from_mark = match mark {
+                                            Mark::Goal(_) => mark_to_ball_vec.length().min(150.0),
+                                            Mark::Player(_) => mark_to_ball_vec.length() / 2.0,
+                                        };
+                                        target.pos = mark_pos
+                                            + mark_to_ball_vec.normalize() * dist_from_mark;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 None => {
@@ -699,6 +767,7 @@ fn build_player(eb: &mut EntityBuilder, x: f32, y: f32, offs: f32, team: u8) {
     eb.add(Team(team));
     eb.add(Timer(0));
     eb.add(Animation::new());
+    eb.add(Lead(None));
 }
 
 fn update_players(world: &mut World, ball: Entity) {
