@@ -402,8 +402,10 @@ impl Game {
     }
 
     fn set_player_targets(&mut self) {
-        for (id, (pos, team, target)) in &mut self.world.query::<(&Position, &Team, &mut Target)>()
+        for (id, (pos, team, home, target)) in
+            &mut self.world.query::<(&Position, &Team, &Home, &mut Target)>()
         {
+            // if we're pre-kickoff and not the kickoff player, just stand and wait
             if self.kickoff_player.is_some() && self.kickoff_player.unwrap() != id {
                 target.pos = pos.0;
                 continue;
@@ -413,16 +415,57 @@ impl Game {
                 None => false,
                 Some(aid) => aid == id,
             };
+            let home = self.world.get::<Home>(id).unwrap().0;
+            let ball_pos = self.world.get::<Position>(self.ball).unwrap().0;
+            let active = (ball_pos.y - pos.0.y).abs() < 400.0;
+            // choose one of the following behaviours
+            // if we're the currently-controlled player on a human team, respond to controls
             if my_team.human() && i_am_active_player {
-                // todo check we're not frozen for kickoff
                 if self.ball_owner == Some(id) {
                     target.speed = HUMAN_PLAYER_WITH_BALL_SPEED;
                 } else {
                     target.speed = HUMAN_PLAYER_WITHOUT_BALL_SPEED;
                 }
                 target.pos = pos.0 + my_team.controls.unwrap().movement();
+                continue;
             }
-            // todo all of the other player behaviours
+            // set the default behaviour
+            target.pos = home;
+            target.speed = PLAYER_DEFAULT_SPEED;
+            match self.ball_owner {
+                Some(owner_id) if owner_id == id => {
+                    // todo if we're computer-controlled and have the ball, do the cost function thing
+                }
+                Some(owner_id) => {
+                    if team.0 == self.world.get::<Team>(owner_id).unwrap().0 {
+                        // if my team has the ball and I'm active, go somewhere useful
+                        if active {
+                            let direction = if team.0 == 0 { -1. } else { 1. };
+                            target.pos = (home + (ball_pos + vec2(0.0, 400.0 * direction))) / 2.0;
+                        }
+                    } else {
+                        // todo if other team has the ball and I'm a lead, try to intercept
+                        // todo if other team has the ball, my mark is active and I'm human, run toward the ball
+                        // todo if other team has the ball, my mark is active and I'm computer, mark them
+                    }
+                }
+                None => {
+                    // if no-one has the ball and I'm active, try to intercept the ball
+                    let mut sim_ball_pos = ball_pos;
+                    let mut sim_ball_vel = *self.world.get::<Vector>(self.ball).unwrap();
+                    let mut frame = 0.0;
+                    while (sim_ball_pos - pos.0).length()
+                        > PLAYER_INTERCEPT_BALL_SPEED * frame + DRIBBLE_DIST_X
+                        && sim_ball_vel.length() > 0.5
+                    {
+                        sim_ball_pos += sim_ball_vel;
+                        sim_ball_vel *= DRAG;
+                        frame += 1.0;
+                    }
+                    target.pos = sim_ball_pos;
+                    target.speed = PLAYER_INTERCEPT_BALL_SPEED;
+                }
+            }
         }
     }
 
