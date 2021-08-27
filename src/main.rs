@@ -117,14 +117,6 @@ const MAX_SPEED: f32 = 10.0;
 const GOALS_TO_WIN: u8 = 9;
 const GOAL_FRAMES: i32 = 60;
 
-/*
-DEBUG_SHOW_LEADS = False
-DEBUG_SHOW_TARGETS = False
-DEBUG_SHOW_PEERS = False
-DEBUG_SHOW_SHOOT_TARGET = False
-DEBUG_SHOW_COSTS = False
-*/
-
 #[derive(Copy, Clone)]
 struct Controls {
     up: KeyCode,
