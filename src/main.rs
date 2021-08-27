@@ -1,5 +1,8 @@
 use euclid::{vec2, Vector2D};
 use hecs::{Entity, EntityBuilder, World};
+use macroquad::audio::{
+    load_sound, play_sound, play_sound_once, set_sound_volume, stop_sound, PlaySoundParams, Sound,
+};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 use std::collections::HashMap;
@@ -112,6 +115,7 @@ const HUMAN_PLAYER_WITHOUT_BALL_SPEED: f32 = 3.3;
 const MAX_SPEED: f32 = 10.0;
 
 const GOALS_TO_WIN: u8 = 9;
+const GOAL_FRAMES: i32 = 60;
 
 /*
 DEBUG_SHOW_LEADS = False
@@ -233,6 +237,15 @@ enum State {
     GameOver,
 }
 
+impl State {
+    fn is_menu(&self) -> bool {
+        match self {
+            Self::Menu(_, _) => true,
+            _ => false,
+        }
+    }
+}
+
 enum MenuState {
     NumPlayers,
     Difficulty,
@@ -263,6 +276,13 @@ enum MenuChange {
     Up,
     Down,
     NoChange,
+}
+
+#[derive(PartialEq)]
+enum SoundState {
+    None,
+    Menu,
+    Play(f32),
 }
 
 #[derive(Debug)]
@@ -361,10 +381,9 @@ impl Game {
         if self.score_timer == 0 {
             self.reset();
         } else if self.score_timer < 0 && (ball_y - HALF_LEVEL_H).abs() > HALF_PITCH_H {
-            // todo play goal sound
             self.scoring_team = if ball_y < HALF_LEVEL_H { 0 } else { 1 };
             self.teams[self.scoring_team].score += 1;
-            self.score_timer = 60;
+            self.score_timer = GOAL_FRAMES;
         }
     }
 
@@ -947,6 +966,23 @@ impl Textures {
     }
 }
 
+struct Sounds(HashMap<String, macroquad::audio::Sound>);
+
+impl Sounds {
+    fn new() -> Self {
+        return Self(HashMap::new());
+    }
+    async fn preload(&mut self, key: impl Into<String>, is_music: bool) {
+        let key: String = key.into();
+        let dir = if is_music { "music" } else { "sounds" };
+        let sound = load_sound(&format!("{}/{}.ogg", dir, key)).await.unwrap();
+        self.0.insert(key, sound);
+    }
+    fn get(&self, key: &str) -> Sound {
+        *self.0.get(key).unwrap()
+    }
+}
+
 #[macroquad::main(window_conf())]
 async fn main() {
     macroquad::rand::srand(macroquad::miniquad::date::now() as u64);
@@ -978,10 +1014,19 @@ async fn main() {
         textures.preload(format!("l0{}", k)).await;
         textures.preload(format!("l1{}", k)).await;
     }
-    // todo set up sound
+    let mut sounds = Sounds::new();
+    sounds.preload("theme", true).await;
+    sounds.preload("crowd", false).await;
+    sounds.preload("move", false).await;
+    sounds.preload("goal0", false).await;
+    sounds.preload("goal1", false).await;
+    for k in 0..=3 {
+        sounds.preload(format!("kick{}", k), false).await;
+    }
     let mut state = State::Menu(MenuState::NumPlayers, Settings::new());
     let mut game = Game::new(get_difficulty(DifficultyLevel::Hard));
     let mut debug_draw = false;
+    let mut sound_state = SoundState::None;
     loop {
         match state {
             State::Menu(ref mut menu_state, ref mut settings) => {
@@ -1013,7 +1058,7 @@ async fn main() {
                         change = MenuChange::Down;
                     }
                     if change != MenuChange::NoChange {
-                        // todo play "move" sound
+                        play_sound_once(sounds.get("move"));
                         match menu_state {
                             MenuState::NumPlayers => {
                                 settings.num_players = match settings.num_players {
@@ -1061,7 +1106,7 @@ async fn main() {
             State::GameOver => {
                 if is_key_pressed(KeyCode::Space) {
                     state = State::Menu(MenuState::NumPlayers, Settings::new());
-                    Game::new(get_difficulty(DifficultyLevel::Hard));
+                    game = Game::new(get_difficulty(DifficultyLevel::Hard));
                 }
             }
         }
@@ -1242,8 +1287,51 @@ async fn main() {
             }
         }
 
+        if state.is_menu() {
+            if sound_state != SoundState::Menu {
+                sound_state = SoundState::Menu;
+                stop_sound(sounds.get("crowd"));
+                play_sound_looped(sounds.get("theme"), 1.0);
+            }
+        } else {
+            if let SoundState::Play(vol) = sound_state {
+                if vol <= 0.0 {
+                    stop_sound(sounds.get("theme"));
+                } else {
+                    set_sound_volume(sounds.get("theme"), vol);
+                    sound_state = SoundState::Play(vol - 1.0 / 30.0);
+                }
+                if vol == 1.0 {
+                    stop_sound(sounds.get("goal0"));
+                    stop_sound(sounds.get("goal1"));
+                }
+            } else {
+                sound_state = SoundState::Play(1.0);
+                play_sound_looped(sounds.get("crowd"), 0.5);
+            }
+            if game.score_timer == GOAL_FRAMES {
+                // scored a goal this frame
+                let n = rand::gen_range(0, 2);
+                play_sound_once(sounds.get(&format!("goal{}", n)));
+            }
+            if game.shoot_now[0] || game.shoot_now[1] {
+                let n = rand::gen_range(0, 4);
+                play_sound_once(sounds.get(&format!("kick{}", n)));
+            }
+        }
+
         next_frame().await;
     }
+}
+
+fn play_sound_looped(sound: Sound, volume: f32) {
+    play_sound(
+        sound,
+        PlaySoundParams {
+            looped: true,
+            volume,
+        },
+    );
 }
 
 fn debug_draw_line(offs_x: f32, offs_y: f32, v1: Vector, v2: Vector, t: f32, c: Color) {
