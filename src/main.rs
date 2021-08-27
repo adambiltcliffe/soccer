@@ -77,12 +77,10 @@ fn on_pitch(x: f32, y: f32) -> bool {
             && y < GOAL_BOUNDS_Y.1)
 }
 
-/*
-AI_MIN_X = 78
-AI_MAX_X = LEVEL_W - 78
-AI_MIN_Y = 98
-AI_MAX_Y = LEVEL_H - 98
-*/
+const AI_MIN_X: f32 = 78.0;
+const AI_MAX_X: f32 = LEVEL_W - 78.0;
+const AI_MIN_Y: f32 = 98.0;
+const AI_MAX_Y: f32 = LEVEL_H - 98.0;
 
 const KICK_STRENGTH: f32 = 11.5;
 const DRAG: f32 = 0.98;
@@ -97,10 +95,8 @@ const PLAYER_START_POS: [(f32, f32); 7] = [
     (650., 1150.),
 ];
 
-/*
-LEAD_DISTANCE_1 = 10
-LEAD_DISTANCE_2 = 50
-*/
+const LEAD_DISTANCE_1: f32 = 10.0;
+const LEAD_DISTANCE_2: f32 = 50.0;
 
 const DRIBBLE_DIST_X: f32 = 18.0;
 const DRIBBLE_DIST_Y: f32 = 16.0;
@@ -290,7 +286,7 @@ enum Mark {
     Player(Entity),
 }
 
-struct Lead(Option<f32>);
+struct Lead(Option<f32>, Option<u8>);
 
 struct TeamInfo {
     controls: Option<Controls>,
@@ -415,11 +411,12 @@ impl Game {
     fn set_behaviours(&mut self) {
         for (_, (peer, mark, lead)) in self.world.query_mut::<(&Peer, &mut Mark, &mut Lead)>() {
             *mark = Mark::Player(peer.0);
-            *lead = Lead(None);
+            *lead = Lead(None, None);
         }
         match self.ball_owner {
             None => {}
             Some(owner_id) => {
+                let ball_owner_pos = self.world.get::<Position>(owner_id).unwrap().0;
                 let defending_team = 1 - self.world.get::<Team>(owner_id).unwrap().0;
                 let goal = vec2(HALF_LEVEL_W, (1 - defending_team) as f32 * LEVEL_H);
                 if self.difficulty.goalie_enabled {
@@ -437,7 +434,55 @@ impl Game {
                     *self.world.get_mut::<Mark>(ball_owner_peer).unwrap() = goalie_mark;
                     *self.world.get_mut::<Mark>(goalie).unwrap() = Mark::Goal(Position(goal));
                 }
-                // todo find the two leads
+                // find the two leads
+                let mut players = self
+                    .world
+                    .query::<(&Team, &Timer, &Mark, &Position)>()
+                    .iter()
+                    .filter(|(id, (team, timer, mark, _))| {
+                        let dt = &self.teams[defending_team as usize];
+                        team.0 == defending_team
+                            && timer.0 <= 0
+                            && (!dt.human()
+                                || dt.active_player.is_none()
+                                || dt.active_player.unwrap() != *id)
+                            && match *mark {
+                                Mark::Player(_) => true,
+                                Mark::Goal(_) => false,
+                            }
+                    })
+                    .map(|(id, (_, _, _, pos))| (id, pos.0))
+                    .collect::<Vec<_>>();
+                players.sort_by(|a, b| cmp_dist(a.1, b.1, ball_owner_pos));
+                let (upfield, downfield): (Vec<(Entity, Vector)>, Vec<(Entity, Vector)>) =
+                    players.iter().partition(|(_, pos)| {
+                        if defending_team == 1 {
+                            pos.y > ball_owner_pos.y
+                        } else {
+                            pos.y < ball_owner_pos.y
+                        }
+                    });
+                let mut upfield: Vec<_> = upfield.into_iter().map(Some).collect();
+                upfield.extend([None, None]);
+                let mut downfield: Vec<_> = downfield.into_iter().map(Some).collect();
+                downfield.extend([None, None]);
+                use std::iter::once;
+                let alternating: Vec<(Entity, Vector)> = upfield
+                    .into_iter()
+                    .zip(downfield.into_iter())
+                    .flat_map(|tup| once(tup.0).chain(once(tup.1)))
+                    .filter_map(|x| x)
+                    .collect();
+                for (n, (id, _)) in alternating.iter().enumerate() {
+                    let mut lead = self.world.get_mut::<Lead>(*id).unwrap();
+                    lead.1 = Some(n as u8);
+                    if n == 0 {
+                        lead.0 = Some(LEAD_DISTANCE_1);
+                    }
+                    if n == 1 && self.difficulty.second_lead_enabled {
+                        lead.0 = Some(LEAD_DISTANCE_2);
+                    }
+                }
             }
         }
     }
@@ -489,6 +534,21 @@ impl Game {
                         match lead.0 {
                             Some(lead_dist) => {
                                 // todo if other team has the ball and I'm a lead, try to intercept
+                                let ball_owner_ref = self.world.entity(owner_id).unwrap();
+                                let ball_owner_pos = ball_owner_ref.get::<Position>().unwrap().0;
+                                let ball_owner_dir = ball_owner_ref.get::<Animation>().unwrap().dir;
+                                let mut targ =
+                                    ball_owner_pos + Angle::to_vec(ball_owner_dir) * lead_dist;
+                                targ.x = targ.x.max(AI_MIN_X).min(AI_MAX_X);
+                                targ.y = targ.y.max(AI_MIN_Y).min(AI_MAX_Y);
+                                let other_team = &self.teams[1 - team.0 as usize];
+                                target.pos = targ;
+                                target.speed = LEAD_PLAYER_BASE_SPEED
+                                    + if other_team.human() {
+                                        self.difficulty.speed_boost
+                                    } else {
+                                        0.
+                                    };
                             }
                             None => {
                                 let mark_pos = match mark {
@@ -767,7 +827,7 @@ fn build_player(eb: &mut EntityBuilder, x: f32, y: f32, offs: f32, team: u8) {
     eb.add(Team(team));
     eb.add(Timer(0));
     eb.add(Animation::new());
-    eb.add(Lead(None));
+    eb.add(Lead(None, None));
 }
 
 fn update_players(world: &mut World, ball: Entity) {
@@ -1142,6 +1202,7 @@ async fn main() {
         }
 
         if debug_draw {
+            draw_text("DEBUG MODE", 10., 10., 16., WHITE);
             // show player movement targets
             for (_, (pos, target)) in &mut game.world.query::<(&Position, &Target)>() {
                 debug_draw_line(offs_x, offs_y, pos.0, target.pos, 1.0, RED);
@@ -1158,6 +1219,26 @@ async fn main() {
             for (_, (pos, peer)) in &mut game.world.query::<(&Position, &Peer)>() {
                 let peer_pos = game.world.get::<Position>(peer.0).unwrap();
                 debug_draw_line(offs_x, offs_y, pos.0, peer_pos.0, 1.0, BLUE);
+            }
+            // show leads
+            for (_, (pos, lead)) in &mut game.world.query::<(&Position, &Lead)>() {
+                if let Lead(dist, Some(index)) = lead {
+                    draw_text(
+                        &format!("LEAD {}", index).to_owned(),
+                        pos.0.x - offs_x + 15.0,
+                        pos.0.y - offs_y,
+                        24.0,
+                        BLACK,
+                    );
+                    if dist.is_some() && game.ball_owner.is_some() {
+                        let v2 = game
+                            .world
+                            .get::<Position>(game.ball_owner.unwrap())
+                            .unwrap()
+                            .0;
+                        debug_draw_line(offs_x, offs_y, pos.0, v2, 2.0, BLACK)
+                    }
+                }
             }
         }
 
