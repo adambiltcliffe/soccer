@@ -499,11 +499,15 @@ impl Game {
     }
 
     fn set_player_targets(&mut self) {
-        for (id, (pos, team, home, lead, mark, target)) in
-            &mut self
-                .world
-                .query::<(&Position, &Team, &Home, &Lead, &Mark, &mut Target)>()
-        {
+        for (id, (pos, team, home, lead, mark, anim, target)) in &mut self.world.query::<(
+            &Position,
+            &Team,
+            &Home,
+            &Lead,
+            &Mark,
+            &Animation,
+            &mut Target,
+        )>() {
             // if we're pre-kickoff and not the kickoff player, just stand and wait
             if self.kickoff_player.is_some() && self.kickoff_player.unwrap() != id {
                 target.pos = pos.0;
@@ -532,7 +536,18 @@ impl Game {
             target.speed = PLAYER_DEFAULT_SPEED;
             match self.ball_owner {
                 Some(owner_id) if owner_id == id => {
-                    // todo if we're computer-controlled and have the ball, do the cost function thing
+                    // if we're computer-controlled and have the ball, do the cost function thing
+                    let best_dest = (-2..=2)
+                        .map(|d| {
+                            let dest = pos.0 + Angle::to_vec(Angle(anim.dir.0 + d)) * 3.0;
+                            let cost = self.cost(dest, team.0, d.abs() as f32);
+                            (cost, dest)
+                        })
+                        .min_by(|a, b| (a.0).partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+                        .unwrap()
+                        .1;
+                    target.pos = best_dest;
+                    target.speed = CPU_PLAYER_WITH_BALL_BASE_SPEED + self.difficulty.speed_boost;
                 }
                 Some(owner_id) => {
                     if team.0 == self.world.get::<Team>(owner_id).unwrap().0 {
@@ -544,7 +559,7 @@ impl Game {
                     } else {
                         match lead.0 {
                             Some(lead_dist) => {
-                                // todo if other team has the ball and I'm a lead, try to intercept
+                                // if other team has the ball and I'm a lead, try to intercept
                                 let ball_owner_ref = self.world.entity(owner_id).unwrap();
                                 let ball_owner_pos = ball_owner_ref.get::<Position>().unwrap().0;
                                 let ball_owner_dir = ball_owner_ref.get::<Animation>().unwrap().dir;
@@ -606,6 +621,26 @@ impl Game {
                 }
             }
         }
+    }
+
+    fn cost(&self, pos: Vector, team: u8, handicap: f32) -> f32 {
+        let own_goal_pos = vec2(HALF_LEVEL_W, if team == 1 { 78. } else { LEVEL_H - 78. });
+        let inverse_own_goal_dist = 3500.0 / (pos - own_goal_pos).length();
+        let player_dist_sum: f32 = self
+            .world
+            .query::<(&Position, &Team)>()
+            .iter()
+            .filter_map(|(_, (p2, t2))| {
+                if t2.0 == team {
+                    None
+                } else {
+                    Some(4000. / (p2.0 - pos).length().max(24.))
+                }
+            })
+            .sum();
+        inverse_own_goal_dist + player_dist_sum + ((pos.x - HALF_LEVEL_W).powf(2.) / 200.)
+            - pos.y * (4. * team as f32 - 2.)
+            + handicap
     }
 
     fn update_ball(&mut self) {
@@ -1274,6 +1309,22 @@ async fn main() {
                             .unwrap()
                             .0;
                         debug_draw_line(offs_x, offs_y, pos.0, v2, 2.0, BLACK)
+                    }
+                }
+            }
+            if let Some(owner_id) = game.ball_owner {
+                let ball_owner_team = game.world.get::<Team>(owner_id).unwrap().0;
+                for x in (0..(LEVEL_W as i32)).step_by(60) {
+                    for y in (0..(LEVEL_H as i32)).step_by(26) {
+                        let v = vec2(x as f32, y as f32);
+                        let c = game.cost(v, ball_owner_team, 0.0);
+                        draw_text(
+                            &format!("{:.0}", c).to_owned(),
+                            v.x - offs_x,
+                            v.y - offs_y,
+                            24.0,
+                            GRAY,
+                        );
                     }
                 }
             }
