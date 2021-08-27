@@ -749,7 +749,6 @@ impl Game {
                     .map(|(id, (_, p))| ShootTarget::Player(*p, id))
                     .collect();
                 // ... plus the opposing goal
-                // todo: if owner is a computer, filter out interceptable passes
                 targets.push(ShootTarget::Goal(Position(vec2(
                     HALF_LEVEL_W,
                     owner_team_id as f32 * LEVEL_H,
@@ -758,6 +757,20 @@ impl Game {
                     let shoot_vec = st.position().0 - owner_pos;
                     if shoot_vec.length() <= 0.0 || shoot_vec.length() >= 300.0 {
                         return false;
+                    }
+                    // if owner is a computer, filter out interceptable passes
+                    if !owner_team_human {
+                        for (_, (opp_pos, team)) in &mut self.world.query::<(&Position, &Team)>() {
+                            if team.0 != owner_team_id {
+                                let v1 = (opp_pos.0 - owner_pos).normalize();
+                                if v1.length() > 0.0
+                                    && v1.length() < shoot_vec.length()
+                                    && shoot_vec.normalize().dot(v1) > 0.8
+                                {
+                                    return false;
+                                }
+                            }
+                        }
                     }
                     let source_dir = self.world.get::<Animation>(owner_id).unwrap().dir;
                     shoot_vec.normalize().dot(Angle::to_vec(source_dir)) > 0.8
@@ -770,8 +783,16 @@ impl Game {
                 if owner_team.human() {
                     do_shoot = is_key_pressed(owner_team.controls.unwrap().shoot)
                 } else {
-                    // todo logic for when computer players shoot
-                    do_shoot = false;
+                    // computer players shoot if target is lower cost than current position
+                    let ball_timer = self.world.get_mut::<Timer>(self.ball).unwrap().0;
+                    do_shoot = match best_target {
+                        None => false,
+                        Some(st) => {
+                            ball_timer <= 0
+                                && self.cost(st.position().0, owner_team_id, 0.)
+                                    < self.cost(owner_pos, owner_team_id, 0.)
+                        }
+                    };
                 }
                 self.shoot_now[owner_team_id as usize] = do_shoot;
                 if do_shoot {
